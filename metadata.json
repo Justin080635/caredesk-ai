@@ -1,0 +1,6 @@
+{
+  "name": "CareDesk AI",
+  "description": "Intelligent healthcare operations copilot and administrative platform for clinic scheduling, patient management, follow-ups, and operational reporting.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
