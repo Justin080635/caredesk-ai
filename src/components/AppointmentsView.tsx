@@ -1,35 +1,50 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  ArrowUpDown,
   Calendar,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Clock,
   List,
   Plus,
   Search,
+  Trash2,
   X,
 } from 'lucide-react';
 import {
   createAppointmentRecord,
+  deleteAppointmentRecord,
   fetchAppointmentById,
   fetchAppointments,
+  fetchAppointmentsPaginated,
   fetchAvailableSlots,
+  fetchDoctorAvailability,
   fetchOverviewReport,
   fetchPatients,
+  fetchStaff,
   updateAppointmentRecord,
 } from '../client/api';
-import { CLINIC_CLINICIANS, CLINIC_DEPARTMENTS } from '../shared/constants';
+import { APPOINTMENT_TYPES, CLINIC_CLINICIANS, CLINIC_DEPARTMENTS } from '../shared/constants';
 import type {
   Appointment,
+  AppointmentPaginationMeta,
+  AppointmentSortField,
   AppointmentStatus,
+  AppointmentType,
   AvailableSlot,
   CalendarDaySummary,
+  DoctorAvailabilitySummary,
   Patient,
+  SortDirection,
+  StaffMember,
+  UserRole,
 } from '../shared/types';
 import { ClinicCalendar } from './ClinicCalendar';
 import { ClinicEmptyIllustration, EditorialAvatar } from './ClinicIllustrations';
 import { ModalShell } from './ModalShell';
-import { AppointmentStatusText } from './StatusText';
+import { AppointmentStatusText, DoctorDutyStatusText, RequestStatusText } from './StatusText';
 
 interface AppointmentsViewProps {
   onDataMutated: () => void;
@@ -41,7 +56,27 @@ interface AppointmentsViewProps {
   initialDateFilter?: string;
   initialDetailAppointmentId?: string | null;
   onOpenPatient?: (patientId: string) => void;
+  onOpenStaffByName?: (clinicianName: string) => void;
+  sessionRole?: UserRole;
   compactDensity?: boolean;
+}
+
+const APPOINTMENTS_PAGE_SIZE = 10;
+
+function getVisiblePageNumbers(currentPage: number, totalPages: number): Array<number | 'ellipsis'> {
+  if (totalPages <= 7) {
+    return Array.from({ length: totalPages }, (_, idx) => idx + 1);
+  }
+  const pages: Array<number | 'ellipsis'> = [1];
+  const left = Math.max(2, currentPage - 1);
+  const right = Math.min(totalPages - 1, currentPage + 1);
+  if (left > 2) pages.push('ellipsis');
+  for (let p = left; p <= right; p += 1) {
+    pages.push(p);
+  }
+  if (right < totalPages - 1) pages.push('ellipsis');
+  pages.push(totalPages);
+  return pages;
 }
 
 function toMinutes(timeStr: string): number {
@@ -93,27 +128,52 @@ export function AppointmentsView({
   initialDateFilter,
   initialDetailAppointmentId,
   onOpenPatient,
+  onOpenStaffByName,
+  sessionRole = 'administrator',
   compactDensity = false,
 }: AppointmentsViewProps) {
   const [viewMode, setViewMode] = useState<'list' | 'calendar'>('list');
   const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [paginationMeta, setPaginationMeta] = useState<AppointmentPaginationMeta>({
+    count: 0,
+    total: 0,
+    page: 1,
+    pageSize: APPOINTMENTS_PAGE_SIZE,
+    totalPages: 1,
+    sortBy: 'appointmentDate',
+    sortDir: 'asc',
+    statusCounts: {
+      Scheduled: 0,
+      Confirmed: 0,
+      Completed: 0,
+      Cancelled: 0,
+      Missed: 0,
+    },
+  });
   const [calendarSummaries, setCalendarSummaries] = useState<CalendarDaySummary[]>([]);
   const [patients, setPatients] = useState<Patient[]>([]);
+  const [cliniciansList, setCliniciansList] = useState<StaffMember[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const [statusFilter, setStatusFilter] = useState(initialStatusFilter ?? 'All');
   const [deptFilter, setDeptFilter] = useState('All');
+  const [clinicianFilter, setClinicianFilter] = useState('All');
   const [dateFilter, setDateFilter] = useState(initialDateFilter ?? '');
   const [calendarDate, setCalendarDate] = useState(() => {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   });
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [sortBy, setSortBy] = useState<AppointmentSortField>('appointmentDate');
+  const [sortDir, setSortDir] = useState<SortDirection>('asc');
 
   // Availability Drawer State
   const [showAvailability, setShowAvailability] = useState(false);
   const [availDept, setAvailDept] = useState('All');
   const [availSlots, setAvailSlots] = useState<AvailableSlot[]>([]);
+  const [availDoctors, setAvailDoctors] = useState<DoctorAvailabilitySummary[]>([]);
   const [availLoading, setAvailLoading] = useState(false);
 
   // Selected detail panel
@@ -129,6 +189,7 @@ export function AppointmentsView({
   const [newTime, setNewTime] = useState('10:00');
   const [newDept, setNewDept] = useState<string>(CLINIC_DEPARTMENTS[0]);
   const [newClinician, setNewClinician] = useState<string>(CLINIC_CLINICIANS[0].name);
+  const [newType, setNewType] = useState<AppointmentType>('Consultation');
   const [newNotes, setNewNotes] = useState('');
   const [createError, setCreateError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -140,6 +201,7 @@ export function AppointmentsView({
   const [editDept, setEditDept] = useState<string>(CLINIC_DEPARTMENTS[0]);
   const [editStatus, setEditStatus] = useState<AppointmentStatus>('Scheduled');
   const [editClinician, setEditClinician] = useState('');
+  const [editType, setEditType] = useState<AppointmentType>('Consultation');
   const [editNotes, setEditNotes] = useState('');
   const [editError, setEditError] = useState<string | null>(null);
   const [rescheduleStep, setRescheduleStep] = useState<'edit' | 'confirm'>('edit');
@@ -151,12 +213,29 @@ export function AppointmentsView({
     suggestions: AvailableSlot[];
   } | null>(null);
 
-  // Cancel Confirmation Modal
+  // Cancel & Delete Confirmation Modals
   const [cancellingApt, setCancellingApt] = useState<Appointment | null>(null);
+  const [deletingApt, setDeletingApt] = useState<Appointment | null>(null);
+
+  const canWrite = sessionRole === 'administrator';
+
+  const clinicianOptions = useMemo(() => {
+    const map = new Map<string, { name: string; department: string; staffId?: string }>();
+    for (const st of cliniciansList) {
+      map.set(st.fullName, { name: st.fullName, department: st.department, staffId: st.id });
+    }
+    if (map.size === 0) {
+      for (const c of CLINIC_CLINICIANS) {
+        map.set(c.name, { name: c.name, department: c.department });
+      }
+    }
+    return Array.from(map.values());
+  }, [cliniciansList]);
 
   useEffect(() => {
     if (initialStatusFilter !== undefined) {
       setStatusFilter(initialStatusFilter);
+      setPage(1);
     }
   }, [initialStatusFilter]);
 
@@ -164,6 +243,7 @@ export function AppointmentsView({
     if (initialDateFilter !== undefined) {
       setViewMode('list');
       setDateFilter(initialDateFilter);
+      setPage(1);
     }
   }, [initialDateFilter]);
 
@@ -187,31 +267,85 @@ export function AppointmentsView({
 
   const loadAppointments = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
-      const effectiveDate = viewMode === 'calendar' ? calendarDate : dateFilter || undefined;
-      const [apts, pts, overview] = await Promise.all([
-        fetchAppointments({
-          date: effectiveDate,
-          status: statusFilter,
-          department: deptFilter,
-          search,
-        }),
-        fetchPatients(),
-        fetchOverviewReport(),
-      ]);
-      setAppointments(apts);
-      setPatients(pts);
-      setCalendarSummaries(overview.calendarSummary);
+      if (viewMode === 'calendar') {
+        const [apts, pts, overview, staffClinicians] = await Promise.all([
+          fetchAppointments({
+            date: calendarDate,
+            status: statusFilter,
+            department: deptFilter,
+            clinician: clinicianFilter,
+            search,
+          }),
+          fetchPatients(),
+          fetchOverviewReport(),
+          fetchStaff({ role: 'Clinician' }).catch(() => []),
+        ]);
+        setAppointments(apts);
+        setPatients(pts);
+        setCalendarSummaries(overview.calendarSummary);
+        setCliniciansList(staffClinicians);
+      } else {
+        const [paginated, pts, overview, staffClinicians] = await Promise.all([
+          fetchAppointmentsPaginated({
+            page,
+            pageSize: APPOINTMENTS_PAGE_SIZE,
+            date: dateFilter || undefined,
+            status: statusFilter,
+            department: deptFilter,
+            clinician: clinicianFilter,
+            search,
+            sortBy,
+            sortDir,
+          }),
+          fetchPatients(),
+          fetchOverviewReport(),
+          fetchStaff({ role: 'Clinician' }).catch(() => []),
+        ]);
+        setAppointments(paginated.data);
+        setPaginationMeta(paginated.meta);
+        if (paginated.meta.page !== page) {
+          setPage(paginated.meta.page);
+        }
+        setPatients(pts);
+        setCalendarSummaries(overview.calendarSummary);
+        setCliniciansList(staffClinicians);
+      }
     } catch (err) {
-      onErrorNotice(err instanceof Error ? err.message : 'Unable to load appointments.');
+      const msg = err instanceof Error ? err.message : 'Unable to load appointments.';
+      setLoadError(msg);
+      onErrorNotice(msg);
     } finally {
       setLoading(false);
     }
-  }, [viewMode, calendarDate, dateFilter, statusFilter, deptFilter, search, onErrorNotice]);
+  }, [
+    viewMode,
+    calendarDate,
+    dateFilter,
+    statusFilter,
+    deptFilter,
+    clinicianFilter,
+    search,
+    page,
+    sortBy,
+    sortDir,
+    onErrorNotice,
+  ]);
 
   useEffect(() => {
     loadAppointments();
   }, [loadAppointments]);
+
+  const toggleSort = (field: AppointmentSortField) => {
+    if (sortBy === field) {
+      setSortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortBy(field);
+      setSortDir('asc');
+    }
+    setPage(1);
+  };
 
   useEffect(() => {
     if (openCreateSignal > 0) {
@@ -226,11 +360,17 @@ export function AppointmentsView({
   const loadAvailability = async (dept = availDept) => {
     setAvailLoading(true);
     try {
-      const slots = await fetchAvailableSlots({
-        department: dept === 'All' ? undefined : dept,
-        limit: 12,
-      });
+      const [slots, doctors] = await Promise.all([
+        fetchAvailableSlots({
+          department: dept === 'All' ? undefined : dept,
+          limit: 12,
+        }),
+        fetchDoctorAvailability({
+          department: dept === 'All' ? undefined : dept,
+        }).catch(() => []),
+      ]);
       setAvailSlots(slots);
+      setAvailDoctors(doctors);
     } catch (err) {
       onErrorNotice(err instanceof Error ? err.message : 'Failed to check slot availability.');
     } finally {
@@ -248,7 +388,7 @@ export function AppointmentsView({
 
   const handleDeptChangeInCreate = (dept: string) => {
     setNewDept(dept);
-    const match = CLINIC_CLINICIANS.find((c) => c.department === dept);
+    const match = clinicianOptions.find((c) => c.department === dept);
     if (match) setNewClinician(match.name);
   };
 
@@ -266,11 +406,14 @@ export function AppointmentsView({
     setCreateError(null);
     setSubmitting(true);
     try {
+      const matchedDoc = clinicianOptions.find((c) => c.name === newClinician);
       const created = await createAppointmentRecord({
         patientId: newPatientId,
+        staffId: matchedDoc?.staffId,
         appointmentDate: newDate,
         appointmentTime: newTime,
         department: newDept,
+        appointmentType: newType,
         clinician: newClinician,
         status: 'Scheduled',
         notes: newNotes,
@@ -297,6 +440,7 @@ export function AppointmentsView({
     setEditDept(apt.department);
     setEditStatus(apt.status);
     setEditClinician(apt.clinician);
+    setEditType(apt.appointmentType ?? 'Consultation');
     setEditNotes(apt.notes);
     setEditError(null);
     setRescheduleStep('edit');
@@ -311,6 +455,7 @@ export function AppointmentsView({
       setEditDept(fresh.department);
       setEditStatus(fresh.status);
       setEditClinician(fresh.clinician);
+      setEditType(fresh.appointmentType ?? 'Consultation');
       setEditNotes(fresh.notes);
     } catch {
       // Fall back to row snapshot if refresh fails
@@ -372,7 +517,8 @@ export function AppointmentsView({
       (editDate !== editingApt.appointmentDate ||
         editTime !== editingApt.appointmentTime ||
         editClinician !== editingApt.clinician ||
-        editDept !== editingApt.department)
+        editDept !== editingApt.department ||
+        editType !== (editingApt.appointmentType ?? 'Consultation'))
   );
 
   const persistAppointmentUpdate = async () => {
@@ -380,12 +526,16 @@ export function AppointmentsView({
     setEditError(null);
     setSubmitting(true);
     try {
+      const matchedDoc = clinicianOptions.find((c) => c.name === editClinician);
       const updated = await updateAppointmentRecord(editingApt.id, {
+        staffId: matchedDoc?.staffId,
         appointmentDate: editDate,
         appointmentTime: editTime,
         department: editDept,
+        appointmentType: editType,
         status: editStatus,
         clinician: editClinician,
+        requestStatus: 'None',
         notes: editNotes,
       });
       // Step 7 of reschedule workflow: verify persisted record from database
@@ -402,6 +552,33 @@ export function AppointmentsView({
     } catch (err) {
       setRescheduleStep('edit');
       setEditError(err instanceof Error ? err.message : 'Unable to update appointment.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleTriageRequest = async (
+    apt: Appointment,
+    action: 'approve_cancel' | 'clear_request'
+  ) => {
+    setSubmitting(true);
+    try {
+      const patch =
+        action === 'approve_cancel'
+          ? { status: 'Cancelled' as AppointmentStatus, requestStatus: 'None' as const }
+          : { requestStatus: 'None' as const };
+      const updated = await updateAppointmentRecord(apt.id, patch);
+      const verified = await fetchAppointmentById(updated.id);
+      if (detailApt?.id === verified.id) setDetailApt(verified);
+      onSuccessNotice(
+        action === 'approve_cancel'
+          ? `Approved patient cancellation request for ${verified.id}.`
+          : `Cleared patient request flag on ${verified.id}.`
+      );
+      await loadAppointments();
+      onDataMutated();
+    } catch (err) {
+      onErrorNotice(err instanceof Error ? err.message : 'Unable to process patient request.');
     } finally {
       setSubmitting(false);
     }
@@ -439,11 +616,69 @@ export function AppointmentsView({
     }
   };
 
+  const handleConfirmDelete = async () => {
+    if (!deletingApt) return;
+    setSubmitting(true);
+    try {
+      await deleteAppointmentRecord(deletingApt.id);
+      if (detailApt?.id === deletingApt.id) setDetailApt(null);
+      onSuccessNotice(`Deleted appointment ${deletingApt.id}.`);
+      setDeletingApt(null);
+      await loadAppointments();
+      onDataMutated();
+    } catch (err) {
+      onErrorNotice(err instanceof Error ? err.message : 'Unable to delete appointment.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const statuses = ['All', 'Scheduled', 'Confirmed', 'Completed', 'Missed', 'Cancelled'];
   const cellPad = compactDensity ? 'py-2 px-4' : 'py-3 px-4';
-  const confirmedCount = appointments.filter((a) => a.status === 'Confirmed').length;
-  const unconfirmedCount = appointments.filter((a) => a.status === 'Scheduled').length;
-  const missedCount = appointments.filter((a) => a.status === 'Missed').length;
+
+  const totalMatching =
+    viewMode === 'calendar' ? appointments.length : paginationMeta.total;
+  const confirmedCount =
+    viewMode === 'calendar'
+      ? appointments.filter((a) => a.status === 'Confirmed').length
+      : paginationMeta.statusCounts.Confirmed;
+  const unconfirmedCount =
+    viewMode === 'calendar'
+      ? appointments.filter((a) => a.status === 'Scheduled').length
+      : paginationMeta.statusCounts.Scheduled;
+  const missedCount =
+    viewMode === 'calendar'
+      ? appointments.filter((a) => a.status === 'Missed').length
+      : paginationMeta.statusCounts.Missed;
+
+  const visiblePages = useMemo(
+    () => getVisiblePageNumbers(paginationMeta.page, paginationMeta.totalPages),
+    [paginationMeta.page, paginationMeta.totalPages]
+  );
+
+  const pageRangeStart =
+    paginationMeta.total === 0
+      ? 0
+      : (paginationMeta.page - 1) * paginationMeta.pageSize + 1;
+  const pageRangeEnd =
+    paginationMeta.total === 0
+      ? 0
+      : Math.min(paginationMeta.page * paginationMeta.pageSize, paginationMeta.total);
+
+  const renderSortHeader = (label: string, field: AppointmentSortField) => (
+    <button
+      type="button"
+      onClick={() => toggleSort(field)}
+      className="inline-flex items-center gap-1 font-medium text-[#526259] hover:text-[#111C17] transition-colors whitespace-nowrap"
+      aria-label={`Sort by ${label} (${sortBy === field ? sortDir : 'none'})`}
+    >
+      <span>{label}</span>
+      <ArrowUpDown
+        className={`w-3 h-3 ${sortBy === field ? 'text-[#059669]' : 'text-slate-400'}`}
+        aria-hidden="true"
+      />
+    </button>
+  );
 
   const renderPatientLink = (patientName: string | undefined, patientId: string) => {
     const displayName = patientName ?? patientId;
@@ -480,13 +715,15 @@ export function AppointmentsView({
       <section className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-[#0B261C] text-white rounded-xl p-4">
           <div className="text-xs font-medium text-emerald-200/85">
-            {viewMode === 'calendar' ? `Visits on ${calendarDate.slice(5)}` : 'Listed Visits'}
+            {viewMode === 'calendar' ? `Visits on ${calendarDate.slice(5)}` : 'Matching Visits'}
           </div>
           <div className="text-2xl font-bold font-mono tabular-nums mt-1.5">
-            {appointments.length}
+            {totalMatching}
           </div>
           <div className="text-[11px] text-emerald-100/75 mt-0.5">
-            Matching active clinic filters
+            {viewMode === 'list'
+              ? `Showing ${APPOINTMENTS_PAGE_SIZE} per page`
+              : 'Matching active clinic filters'}
           </div>
         </div>
 
@@ -507,7 +744,7 @@ export function AppointmentsView({
         </div>
 
         <div className="card-surface rounded-xl p-4">
-          <div className="text-xs font-medium text-[#526259]">Missed in View</div>
+          <div className="text-xs font-medium text-[#526259]">Missed in Result Set</div>
           <div
             className={`text-2xl font-bold font-mono tabular-nums mt-1.5 ${
               missedCount > 0 ? 'text-[#DC2626]' : 'text-[#047857]'
@@ -522,7 +759,7 @@ export function AppointmentsView({
       {/* Toolbar */}
       <div className="card-surface rounded-xl p-4 space-y-3">
         <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-2.5">
-          <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 flex-1 min-w-0">
+          <div className="flex flex-wrap items-center gap-2 flex-1 min-w-0">
             <div className="relative flex-1 min-w-[160px] max-w-[205px]">
               <Search
                 className="w-4 h-4 text-[#526259] absolute left-2.5 top-1/2 -translate-y-1/2"
@@ -535,7 +772,10 @@ export function AppointmentsView({
                 id="apt-search-input"
                 type="search"
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                onChange={(e) => {
+                  setSearch(e.target.value);
+                  setPage(1);
+                }}
                 placeholder="Search ID, patient, clinician..."
                 className="w-full pl-8 pr-2.5 py-2 text-xs sm:text-sm border border-[#D4DAD4] rounded-lg"
               />
@@ -551,14 +791,20 @@ export function AppointmentsView({
                     id="apt-date-filter"
                     type="date"
                     value={dateFilter}
-                    onChange={(e) => setDateFilter(e.target.value)}
+                    onChange={(e) => {
+                      setDateFilter(e.target.value);
+                      setPage(1);
+                    }}
                     className="px-2.5 py-2 text-xs sm:text-sm border border-[#D4DAD4] rounded-lg bg-white"
                   />
                 </div>
                 {dateFilter && (
                   <button
                     type="button"
-                    onClick={() => setDateFilter('')}
+                    onClick={() => {
+                      setDateFilter('');
+                      setPage(1);
+                    }}
                     className="text-xs font-medium text-[#526259] hover:text-[#111C17] whitespace-nowrap shrink-0"
                   >
                     All Dates
@@ -574,13 +820,38 @@ export function AppointmentsView({
               <select
                 id="apt-dept-filter"
                 value={deptFilter}
-                onChange={(e) => setDeptFilter(e.target.value)}
+                onChange={(e) => {
+                  setDeptFilter(e.target.value);
+                  setPage(1);
+                }}
                 className="px-2.5 py-2 text-xs sm:text-sm border border-[#D4DAD4] rounded-lg bg-white"
               >
                 <option value="All">All Departments</option>
                 {CLINIC_DEPARTMENTS.map((dept) => (
                   <option key={dept} value={dept}>
                     {dept}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="shrink-0">
+              <label htmlFor="apt-clinician-filter" className="sr-only">
+                Filter by clinician
+              </label>
+              <select
+                id="apt-clinician-filter"
+                value={clinicianFilter}
+                onChange={(e) => {
+                  setClinicianFilter(e.target.value);
+                  setPage(1);
+                }}
+                className="px-2.5 py-2 text-xs sm:text-sm border border-[#D4DAD4] rounded-lg bg-white"
+              >
+                <option value="All">All Clinicians</option>
+                {clinicianOptions.map((c) => (
+                  <option key={c.name} value={c.name}>
+                    {c.name}
                   </option>
                 ))}
               </select>
@@ -626,11 +897,13 @@ export function AppointmentsView({
 
             <button
               type="button"
+              disabled={!canWrite}
+              title={!canWrite ? 'Administrator session required to schedule appointments' : undefined}
               onClick={() => {
                 setCreateError(null);
                 setShowCreateModal(true);
               }}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs sm:text-sm font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg transition-colors whitespace-nowrap shrink-0 btn-press"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs sm:text-sm font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg transition-colors whitespace-nowrap shrink-0 btn-press disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Plus className="w-4 h-4" aria-hidden="true" />
               Schedule Appointment
@@ -648,7 +921,10 @@ export function AppointmentsView({
             <button
               key={st}
               type="button"
-              onClick={() => setStatusFilter(st)}
+              onClick={() => {
+                setStatusFilter(st);
+                setPage(1);
+              }}
               className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                 statusFilter === st
                   ? 'bg-white text-[#0B261C] shadow-xs'
@@ -698,32 +974,71 @@ export function AppointmentsView({
 
           {availLoading ? (
             <div className="h-20 bg-slate-100 rounded animate-pulse" />
-          ) : availSlots.length === 0 ? (
-            <p className="text-xs text-[#526259]">No open slots available in this range.</p>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-              {availSlots.map((slot, idx) => (
-                <div
-                  key={`${slot.date}-${slot.time}-${slot.clinician}-${idx}`}
-                  className="p-3 bg-[#F6F8F6] rounded-lg flex items-center justify-between gap-2"
-                >
-                  <div>
-                    <div className="text-xs font-mono tabular-nums font-semibold text-[#0B261C]">
-                      {slot.date} · {slot.time}
+            <div className="space-y-4">
+              {availDoctors.length > 0 && (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {availDoctors.map((doc) => (
+                    <div
+                      key={doc.staffId}
+                      className="p-3 rounded-lg border border-[#E3E8E4] bg-white space-y-1.5 text-xs"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <div className="font-semibold text-[#111C17]">{doc.fullName}</div>
+                          <div className="text-[11px] text-[#526259]">
+                            {doc.department} · {doc.workingHoursLabel}
+                          </div>
+                        </div>
+                        <DoctorDutyStatusText status={doc.effectiveOperationalState} />
+                      </div>
+                      <div className="flex items-center justify-between text-[11px] font-mono text-[#526259]">
+                        <span>
+                          Load {doc.bookedCount}/{doc.maxDailyCapacity}
+                        </span>
+                        {doc.nextAvailableSlot && (
+                          <button
+                            type="button"
+                            onClick={() => handleBookFromSlot(doc.nextAvailableSlot!)}
+                            className="text-[#047857] hover:underline font-semibold"
+                          >
+                            Book {doc.nextAvailableSlot.date} {doc.nextAvailableSlot.time}
+                          </button>
+                        )}
+                      </div>
                     </div>
-                    <div className="text-[11px] text-[#526259] mt-0.5">
-                      {slot.department} · {slot.clinician}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => handleBookFromSlot(slot)}
-                    className="px-2.5 py-1 text-xs font-medium text-[#047857] bg-white hover:bg-[#ECF4EF] border border-[#C6DFD1] rounded transition-colors whitespace-nowrap shrink-0"
-                  >
-                    Book
-                  </button>
+                  ))}
                 </div>
-              ))}
+              )}
+
+              {availSlots.length === 0 ? (
+                <p className="text-xs text-[#526259]">No open slots available in this range.</p>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                  {availSlots.map((slot, idx) => (
+                    <div
+                      key={`${slot.date}-${slot.time}-${slot.clinician}-${idx}`}
+                      className="p-3 bg-[#F6F8F6] rounded-lg flex items-center justify-between gap-2"
+                    >
+                      <div>
+                        <div className="text-xs font-mono tabular-nums font-semibold text-[#0B261C]">
+                          {slot.date} · {slot.time}
+                        </div>
+                        <div className="text-[11px] text-[#526259] mt-0.5">
+                          {slot.department} · {slot.clinician}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleBookFromSlot(slot)}
+                        className="px-2.5 py-1 text-xs font-medium text-[#047857] bg-white hover:bg-[#ECF4EF] border border-[#C6DFD1] rounded transition-colors whitespace-nowrap shrink-0"
+                      >
+                        Book
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </section>
@@ -750,17 +1065,19 @@ export function AppointmentsView({
                   {appointments.length} appointment{appointments.length === 1 ? '' : 's'} matching filters
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setNewDate(calendarDate);
-                  setCreateError(null);
-                  setShowCreateModal(true);
-                }}
-                className="text-xs font-medium text-[#047857] hover:text-[#0B261C]"
-              >
-                + Book on {calendarDate}
-              </button>
+              {canWrite && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNewDate(calendarDate);
+                    setCreateError(null);
+                    setShowCreateModal(true);
+                  }}
+                  className="text-xs font-medium text-[#047857] hover:text-[#0B261C]"
+                >
+                  + Book on {calendarDate}
+                </button>
+              )}
             </div>
 
             {appointments.length === 0 ? (
@@ -774,19 +1091,21 @@ export function AppointmentsView({
                     Book a conflict-free slot on {calendarDate} or adjust status filters.
                   </p>
                 </div>
-                <div className="flex items-center justify-center gap-2 pt-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setNewDate(calendarDate);
-                      setCreateError(null);
-                      setShowCreateModal(true);
-                    }}
-                    className="px-3.5 py-1.5 text-xs font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg transition-colors btn-press"
-                  >
-                    Book on {calendarDate}
-                  </button>
-                </div>
+                {canWrite && (
+                  <div className="flex items-center justify-center gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNewDate(calendarDate);
+                        setCreateError(null);
+                        setShowCreateModal(true);
+                      }}
+                      className="px-3.5 py-1.5 text-xs font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg transition-colors btn-press"
+                    >
+                      Book on {calendarDate}
+                    </button>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="divide-y divide-[#EEF2EF]">
@@ -822,19 +1141,32 @@ export function AppointmentsView({
                           </span>
                         </div>
                         <div className="text-xs text-[#526259] mt-1">
-                          {apt.department} · {apt.clinician}
+                          {apt.department} ·{' '}
+                          {onOpenStaffByName ? (
+                            <button
+                              type="button"
+                              onClick={() => onOpenStaffByName(apt.clinician)}
+                              className="text-[#047857] hover:underline font-medium"
+                            >
+                              {apt.clinician}
+                            </button>
+                          ) : (
+                            apt.clinician
+                          )}
                         </div>
                       </div>
                     </div>
                     <div className="flex items-center gap-3 shrink-0">
                       <AppointmentStatusText status={apt.status} />
-                      <button
-                        type="button"
-                        onClick={() => openEditModal(apt)}
-                        className="text-xs font-medium text-[#047857] hover:text-[#0B261C]"
-                      >
-                        Reschedule / Update
-                      </button>
+                      {canWrite && (
+                        <button
+                          type="button"
+                          onClick={() => openEditModal(apt)}
+                          className="text-xs font-medium text-[#047857] hover:text-[#0B261C]"
+                        >
+                          Reschedule / Update
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -852,17 +1184,22 @@ export function AppointmentsView({
               detailApt ? 'lg:col-span-8' : 'lg:col-span-12'
             } card-surface rounded-xl overflow-hidden`}
           >
-            <div className="px-5 py-3.5 border-b border-[#E3E8E4] flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-[#111C17]">Appointment Schedule</h2>
+            <div className="px-5 py-3.5 border-b border-[#E3E8E4] flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-semibold text-[#111C17]">Appointment Schedule</h2>
+                <span className="text-xs font-mono tabular-nums text-[#526259]">
+                  · Page {paginationMeta.page} of {paginationMeta.totalPages}
+                </span>
+              </div>
               <span className="text-xs font-mono tabular-nums text-[#526259]">
-                {appointments.length} appointment{appointments.length === 1 ? '' : 's'}
+                {paginationMeta.total} matching appointment{paginationMeta.total === 1 ? '' : 's'}
               </span>
             </div>
 
             {loading ? (
-              <div className="p-5 space-y-3" aria-label="Loading appointments">
+              <div className="p-5 space-y-3" aria-busy="true" aria-label="Loading appointments">
                 {Array.from({ length: 6 }).map((_, i) => (
-                  <div key={i} className="flex items-center gap-3 p-2.5 rounded-lg bg-[#F6F8F6]">
+                  <div key={i} className="flex items-center gap-3 p-2.5 rounded-lg bg-[#F6F8F6] animate-pulse">
                     <div className="w-8 h-8 rounded-full bg-[#E3E8E4] shrink-0" />
                     <div className="flex-1 space-y-1.5">
                       <div className="h-3.5 w-44 bg-[#E3E8E4] rounded" />
@@ -871,6 +1208,23 @@ export function AppointmentsView({
                     <div className="h-3.5 w-20 bg-[#E3E8E4] rounded" />
                   </div>
                 ))}
+              </div>
+            ) : loadError ? (
+              <div className="p-10 text-center space-y-3">
+                <AlertTriangle className="w-8 h-8 text-red-700 mx-auto" aria-hidden="true" />
+                <div className="space-y-1">
+                  <p className="text-sm font-medium text-[#111C17]">
+                    Unable to load appointment schedule
+                  </p>
+                  <p className="text-xs text-[#526259] max-w-md mx-auto">{loadError}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={loadAppointments}
+                  className="px-4 py-2 text-xs font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg btn-press"
+                >
+                  Retry
+                </button>
               </div>
             ) : appointments.length === 0 ? (
               <div className="p-10 text-center space-y-3">
@@ -884,7 +1238,11 @@ export function AppointmentsView({
                   </p>
                 </div>
                 <div className="flex items-center justify-center gap-2 pt-1">
-                  {(search || dateFilter || statusFilter !== 'All' || deptFilter !== 'All') && (
+                  {(search ||
+                    dateFilter ||
+                    statusFilter !== 'All' ||
+                    deptFilter !== 'All' ||
+                    clinicianFilter !== 'All') && (
                     <button
                       type="button"
                       onClick={() => {
@@ -892,102 +1250,213 @@ export function AppointmentsView({
                         setDateFilter('');
                         setStatusFilter('All');
                         setDeptFilter('All');
+                        setClinicianFilter('All');
+                        setPage(1);
                       }}
                       className="px-3.5 py-1.5 text-xs font-medium text-[#111C17] bg-white hover:bg-[#F6F8F6] border border-[#D4DAD4] rounded-lg transition-colors btn-press"
                     >
                       Clear Filters
                     </button>
                   )}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setCreateError(null);
-                      setShowCreateModal(true);
-                    }}
-                    className="px-3.5 py-1.5 text-xs font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg transition-colors btn-press"
-                  >
-                    Schedule Appointment
-                  </button>
+                  {canWrite && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCreateError(null);
+                        setShowCreateModal(true);
+                      }}
+                      className="px-3.5 py-1.5 text-xs font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg transition-colors btn-press"
+                    >
+                      Schedule Appointment
+                    </button>
+                  )}
                 </div>
               </div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="border-b border-[#E3E8E4] bg-[#F6F8F6] text-xs font-medium text-[#526259]">
-                      <th className="py-2.5 px-4">ID</th>
-                      <th className="py-2.5 px-4">Date &amp; Time</th>
-                      <th className="py-2.5 px-4">Patient</th>
-                      <th className="py-2.5 px-4">Department · Clinician</th>
-                      <th className="py-2.5 px-4">Status</th>
-                      <th className="py-2.5 px-4 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#EEF2EF] text-sm">
-                    {appointments.map((apt) => (
-                      <tr
-                        key={apt.id}
-                        className={`hover:bg-[#F6F8F6] transition-colors ${
-                          detailApt?.id === apt.id ? 'bg-[#ECF4EF]/65' : ''
-                        }`}
-                      >
-                        <td className={`${cellPad} font-mono tabular-nums text-xs font-semibold text-[#0B261C]`}>
-                          <button
-                            type="button"
-                            onClick={() => setDetailApt(apt)}
-                            className="hover:underline text-left"
-                          >
-                            {apt.id}
-                          </button>
-                        </td>
-                        <td className={`${cellPad} font-mono tabular-nums text-xs text-[#111C17] whitespace-nowrap`}>
-                          {apt.appointmentDate} · {apt.appointmentTime}
-                        </td>
-                        <td className={cellPad}>
-                          {renderPatientLink(apt.patientName, apt.patientId)}
-                        </td>
-                        <td className={`${cellPad} text-xs text-[#526259]`}>
-                          <span className="font-medium text-[#111C17]">{apt.department}</span>
-                          <span aria-hidden="true"> · </span>
-                          <span>{apt.clinician}</span>
-                        </td>
-                        <td className={cellPad}>
-                          <AppointmentStatusText status={apt.status} />
-                        </td>
-                        <td className={`${cellPad} text-right whitespace-nowrap`}>
-                          <div className="inline-flex items-center gap-2.5">
+              <>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="border-b border-[#E3E8E4] bg-[#F6F8F6] text-xs font-medium text-[#526259]">
+                        <th className="py-2.5 px-4">{renderSortHeader('ID', 'id')}</th>
+                        <th className="py-2.5 px-4">
+                          {renderSortHeader('Date & Time', 'appointmentDate')}
+                        </th>
+                        <th className="py-2.5 px-4">{renderSortHeader('Patient', 'patientName')}</th>
+                        <th className="py-2.5 px-4">
+                          <div className="flex items-center gap-2">
+                            {renderSortHeader('Department', 'department')}
+                            <span aria-hidden="true">·</span>
+                            {renderSortHeader('Clinician', 'clinician')}
+                          </div>
+                        </th>
+                        <th className="py-2.5 px-4">{renderSortHeader('Status', 'status')}</th>
+                        <th className="py-2.5 px-4 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#EEF2EF] text-sm animate-view-enter">
+                      {appointments.map((apt) => (
+                        <tr
+                          key={apt.id}
+                          className={`hover:bg-[#F6F8F6] transition-colors ${
+                            detailApt?.id === apt.id ? 'bg-[#ECF4EF]/65' : ''
+                          }`}
+                        >
+                          <td className={`${cellPad} font-mono tabular-nums text-xs font-semibold text-[#0B261C]`}>
                             <button
                               type="button"
                               onClick={() => setDetailApt(apt)}
-                              className="text-xs font-medium text-[#526259] hover:text-[#111C17]"
+                              className="hover:underline text-left"
                             >
-                              Details
+                              {apt.id}
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => openEditModal(apt)}
-                              className="text-xs font-medium text-[#047857] hover:text-[#0B261C]"
-                              aria-label={`Update or reschedule ${apt.id}`}
-                            >
-                              Reschedule
-                            </button>
-                            {apt.status !== 'Cancelled' && apt.status !== 'Completed' && (
+                          </td>
+                          <td className={`${cellPad} font-mono tabular-nums text-xs text-[#111C17] whitespace-nowrap`}>
+                            {apt.appointmentDate} · {apt.appointmentTime}
+                          </td>
+                          <td className={cellPad}>
+                            {renderPatientLink(apt.patientName, apt.patientId)}
+                          </td>
+                          <td className={`${cellPad} text-xs text-[#526259]`}>
+                            <span className="font-medium text-[#111C17]">{apt.department}</span>
+                            <span aria-hidden="true"> · </span>
+                            {onOpenStaffByName ? (
                               <button
                                 type="button"
-                                onClick={() => setCancellingApt(apt)}
-                                className="text-xs font-medium text-red-700 hover:text-red-800"
-                                aria-label={`Cancel appointment ${apt.id}`}
+                                onClick={() => onOpenStaffByName(apt.clinician)}
+                                className="text-[#047857] hover:underline font-medium"
                               >
-                                Cancel
+                                {apt.clinician}
                               </button>
+                            ) : (
+                              <span>{apt.clinician}</span>
                             )}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                          </td>
+                          <td className={cellPad}>
+                            <div className="space-y-1">
+                              <AppointmentStatusText status={apt.status} />
+                              <RequestStatusText status={apt.requestStatus} />
+                            </div>
+                          </td>
+                          <td className={`${cellPad} text-right whitespace-nowrap`}>
+                            <div className="inline-flex items-center gap-2.5">
+                              <button
+                                type="button"
+                                onClick={() => setDetailApt(apt)}
+                                className="text-xs font-medium text-[#526259] hover:text-[#111C17]"
+                              >
+                                Details
+                              </button>
+                              {canWrite && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => openEditModal(apt)}
+                                    className="text-xs font-medium text-[#047857] hover:text-[#0B261C]"
+                                    aria-label={`Update or reschedule ${apt.id}`}
+                                  >
+                                    Reschedule
+                                  </button>
+                                  {apt.status !== 'Cancelled' && apt.status !== 'Completed' && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setCancellingApt(apt)}
+                                      className="text-xs font-medium text-amber-700 hover:text-amber-800"
+                                      aria-label={`Cancel appointment ${apt.id}`}
+                                    >
+                                      Cancel
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => setDeletingApt(apt)}
+                                    className="text-xs font-medium text-red-700 hover:text-red-800 inline-flex items-center gap-1"
+                                    aria-label={`Delete appointment ${apt.id}`}
+                                  >
+                                    <Trash2 className="w-3 h-3" aria-hidden="true" />
+                                    Delete
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Pagination Bar */}
+                <nav
+                  aria-label="Appointment schedule pagination"
+                  className="px-5 py-3.5 border-t border-[#E3E8E4] bg-[#F6F8F6]/70 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                >
+                  <div className="text-xs text-[#526259] font-mono tabular-nums">
+                    Showing <span className="font-semibold text-[#111C17]">{pageRangeStart}</span>–
+                    <span className="font-semibold text-[#111C17]">{pageRangeEnd}</span> of{' '}
+                    <span className="font-semibold text-[#111C17]">{paginationMeta.total}</span>{' '}
+                    matching appointments · Page{' '}
+                    <span className="font-semibold text-[#0B261C]">{paginationMeta.page}</span> of{' '}
+                    <span className="font-semibold text-[#0B261C]">
+                      {paginationMeta.totalPages}
+                    </span>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      disabled={paginationMeta.page <= 1 || loading}
+                      onClick={() => setPage((p) => Math.max(1, p - 1))}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-[#111C17] bg-white hover:bg-[#ECF4EF] border border-[#D4DAD4] rounded-lg disabled:opacity-45 disabled:pointer-events-none transition-colors"
+                      aria-label="Previous page"
+                    >
+                      <ChevronLeft className="w-3.5 h-3.5" aria-hidden="true" />
+                      Previous
+                    </button>
+
+                    <div className="flex items-center gap-1">
+                      {visiblePages.map((item, idx) =>
+                        item === 'ellipsis' ? (
+                          <span
+                            key={`ellipsis-${idx}`}
+                            className="px-1.5 text-xs text-[#526259] select-none"
+                          >
+                            …
+                          </span>
+                        ) : (
+                          <button
+                            key={item}
+                            type="button"
+                            onClick={() => setPage(item)}
+                            aria-label={`Page ${item}`}
+                            aria-current={item === paginationMeta.page ? 'page' : undefined}
+                            className={`min-w-[30px] h-[30px] px-2 text-xs font-mono font-medium rounded-lg border transition-colors ${
+                              item === paginationMeta.page
+                                ? 'bg-[#0B261C] text-white border-[#0B261C]'
+                                : 'bg-white text-[#111C17] border-[#D4DAD4] hover:bg-[#ECF4EF]'
+                            }`}
+                          >
+                            {item}
+                          </button>
+                        )
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      disabled={paginationMeta.page >= paginationMeta.totalPages || loading}
+                      onClick={() =>
+                        setPage((p) => Math.min(paginationMeta.totalPages, p + 1))
+                      }
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-[#111C17] bg-white hover:bg-[#ECF4EF] border border-[#D4DAD4] rounded-lg disabled:opacity-45 disabled:pointer-events-none transition-colors"
+                      aria-label="Next page"
+                    >
+                      Next
+                      <ChevronRight className="w-3.5 h-3.5" aria-hidden="true" />
+                    </button>
+                  </div>
+                </nav>
+              </>
             )}
           </div>
 
@@ -1018,8 +1487,9 @@ export function AppointmentsView({
                         detailApt.patientName
                       )}
                     </h3>
-                    <div className="mt-1">
+                    <div className="mt-1 flex flex-wrap items-center gap-2">
                       <AppointmentStatusText status={detailApt.status} />
+                      <RequestStatusText status={detailApt.requestStatus} />
                     </div>
                   </div>
                 </div>
@@ -1039,8 +1509,10 @@ export function AppointmentsView({
                   <dd className="font-mono font-medium text-[#16211C] mt-0.5">{detailApt.patientId}</dd>
                 </div>
                 <div>
-                  <dt className="text-[#526058]">Duration</dt>
-                  <dd className="font-mono font-medium text-[#16211C] mt-0.5">{detailApt.durationMinutes} min</dd>
+                  <dt className="text-[#526058]">Visit Type &amp; Duration</dt>
+                  <dd className="font-mono font-medium text-[#16211C] mt-0.5">
+                    {detailApt.appointmentType ?? 'Consultation'} · {detailApt.durationMinutes} min
+                  </dd>
                 </div>
                 <div>
                   <dt className="text-[#526058]">Date</dt>
@@ -1053,33 +1525,94 @@ export function AppointmentsView({
                 <div className="col-span-2">
                   <dt className="text-[#526058]">Department &amp; Clinician</dt>
                   <dd className="font-medium text-[#16211C] mt-0.5">
-                    {detailApt.department} · {detailApt.clinician}
+                    {detailApt.department} ·{' '}
+                    {onOpenStaffByName ? (
+                      <button
+                        type="button"
+                        onClick={() => onOpenStaffByName(detailApt.clinician)}
+                        className="text-[#047857] hover:underline"
+                      >
+                        {detailApt.clinician}
+                      </button>
+                    ) : (
+                      detailApt.clinician
+                    )}
                   </dd>
                 </div>
                 <div className="col-span-2">
                   <dt className="text-[#526058]">Administrative Notes</dt>
                   <dd className="text-[#16211C] mt-0.5">{detailApt.notes || 'None recorded.'}</dd>
                 </div>
+                {detailApt.requestStatus && detailApt.requestStatus !== 'None' && (
+                  <div className="col-span-2 p-3 rounded-lg bg-amber-50 border border-amber-200 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <RequestStatusText status={detailApt.requestStatus} />
+                    </div>
+                    {detailApt.requestNotes && (
+                      <p className="text-xs text-amber-900">{detailApt.requestNotes}</p>
+                    )}
+                    {canWrite && (
+                      <div className="flex flex-wrap gap-1.5 pt-1">
+                        {detailApt.requestStatus === 'Reschedule Requested' && (
+                          <button
+                            type="button"
+                            onClick={() => openEditModal(detailApt)}
+                            className="px-2.5 py-1 text-[11px] font-medium text-white bg-[#059669] hover:bg-[#047857] rounded"
+                          >
+                            Approve Reschedule
+                          </button>
+                        )}
+                        {detailApt.requestStatus === 'Cancellation Requested' && (
+                          <button
+                            type="button"
+                            disabled={submitting}
+                            onClick={() => handleTriageRequest(detailApt, 'approve_cancel')}
+                            className="px-2.5 py-1 text-[11px] font-medium text-white bg-red-700 hover:bg-red-800 rounded disabled:opacity-50"
+                          >
+                            Approve Cancellation
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          disabled={submitting}
+                          onClick={() => handleTriageRequest(detailApt, 'clear_request')}
+                          className="px-2.5 py-1 text-[11px] font-medium text-[#111C17] bg-white border border-[#D4DAD4] rounded disabled:opacity-50"
+                        >
+                          Clear Request
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </dl>
 
-              <div className="pt-3 border-t border-[#E4E7E2] flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => openEditModal(detailApt)}
-                  className="flex-1 px-3 py-2 text-xs font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg transition-colors"
-                >
-                  Update / Reschedule
-                </button>
-                {detailApt.status !== 'Cancelled' && detailApt.status !== 'Completed' && (
+              {canWrite && (
+                <div className="pt-3 border-t border-[#E4E7E2] flex flex-wrap items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => setCancellingApt(detailApt)}
+                    onClick={() => openEditModal(detailApt)}
+                    className="flex-1 px-3 py-2 text-xs font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg transition-colors"
+                  >
+                    Update / Reschedule
+                  </button>
+                  {detailApt.status !== 'Cancelled' && detailApt.status !== 'Completed' && (
+                    <button
+                      type="button"
+                      onClick={() => setCancellingApt(detailApt)}
+                      className="px-3 py-2 text-xs font-medium text-amber-700 border border-amber-200 hover:bg-amber-50 rounded-lg transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setDeletingApt(detailApt)}
                     className="px-3 py-2 text-xs font-medium text-red-700 border border-red-200 hover:bg-red-50 rounded-lg transition-colors"
                   >
-                    Cancel
+                    Delete
                   </button>
-                )}
-              </div>
+                </div>
+              )}
             </aside>
           )}
         </div>
@@ -1188,13 +1721,31 @@ export function AppointmentsView({
                     onChange={(e) => setNewClinician(e.target.value)}
                     className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg bg-white"
                   >
-                    {CLINIC_CLINICIANS.map((c) => (
+                    {clinicianOptions.map((c) => (
                       <option key={c.name} value={c.name}>
                         {c.name} ({c.department})
                       </option>
                     ))}
                   </select>
                 </div>
+              </div>
+
+              <div>
+                <label htmlFor="new-apt-type" className="block text-xs font-medium text-[#16211C] mb-1">
+                  Appointment Type
+                </label>
+                <select
+                  id="new-apt-type"
+                  value={newType}
+                  onChange={(e) => setNewType(e.target.value as AppointmentType)}
+                  className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg bg-white"
+                >
+                  {APPOINTMENT_TYPES.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div>
@@ -1338,7 +1889,7 @@ export function AppointmentsView({
                       onChange={(e) => {
                         const dept = e.target.value;
                         setEditDept(dept);
-                        const match = CLINIC_CLINICIANS.find((c) => c.department === dept);
+                        const match = clinicianOptions.find((c) => c.department === dept);
                         if (match) setEditClinician(match.name);
                         setEditAvailabilityStatus(null);
                       }}
@@ -1364,7 +1915,7 @@ export function AppointmentsView({
                       }}
                       className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg bg-white"
                     >
-                      {CLINIC_CLINICIANS.map((c) => (
+                      {clinicianOptions.map((c) => (
                         <option key={c.name} value={c.name}>
                           {c.name}
                         </option>
@@ -1388,6 +1939,24 @@ export function AppointmentsView({
                       <option value="Cancelled">Cancelled</option>
                     </select>
                   </div>
+                </div>
+
+                <div>
+                  <label htmlFor="edit-apt-type" className="block text-xs font-medium text-[#16211C] mb-1">
+                    Appointment Type
+                  </label>
+                  <select
+                    id="edit-apt-type"
+                    value={editType}
+                    onChange={(e) => setEditType(e.target.value as AppointmentType)}
+                    className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg bg-white"
+                  >
+                    {APPOINTMENT_TYPES.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 {/* Inline Slot Availability Check */}
@@ -1599,6 +2168,45 @@ export function AppointmentsView({
                 className="px-4 py-2 text-sm font-medium text-white bg-red-700 hover:bg-red-800 rounded-lg disabled:opacity-50 btn-press"
               >
                 {submitting ? 'Cancelling...' : 'Confirm Cancellation'}
+              </button>
+            </div>
+          </>
+        )}
+      </ModalShell>
+
+      {/* Explicit Delete Confirmation Modal */}
+      <ModalShell
+        open={Boolean(deletingApt)}
+        onClose={() => setDeletingApt(null)}
+        labelledBy="delete-apt-title"
+        maxWidthClass="max-w-md"
+      >
+        {deletingApt && (
+          <>
+            <h3 id="delete-apt-title" className="text-base font-semibold text-[#16211C]">
+              Delete Appointment Record
+            </h3>
+            <p className="text-sm text-[#526058]">
+              Permanently remove appointment{' '}
+              <span className="font-mono font-semibold text-[#16211C]">{deletingApt.id}</span> for{' '}
+              <span className="font-medium text-[#16211C]">{deletingApt.patientName}</span> on{' '}
+              <span className="font-mono">{deletingApt.appointmentDate} {deletingApt.appointmentTime}</span>? This cannot be undone and is recorded in the audit log.
+            </p>
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeletingApt(null)}
+                className="px-4 py-2 text-sm font-medium text-[#526058] border border-[#E4E7E2] rounded-lg"
+              >
+                Keep Record
+              </button>
+              <button
+                type="button"
+                disabled={submitting}
+                onClick={handleConfirmDelete}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-700 hover:bg-red-800 rounded-lg disabled:opacity-50 btn-press"
+              >
+                {submitting ? 'Deleting...' : 'Delete Appointment'}
               </button>
             </div>
           </>

@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowUpDown, CalendarPlus, Pencil, Plus, Search, X } from 'lucide-react';
+import {
+  AlertTriangle,
+  ArrowUpDown,
+  ArrowUpRight,
+  CalendarPlus,
+  Pencil,
+  Plus,
+  Search,
+  X,
+} from 'lucide-react';
 import {
   createPatientRecord,
   fetchPatientDetail,
@@ -11,6 +20,7 @@ import type {
   Appointment,
   FollowUpTask,
   Patient,
+  UserRole,
 } from '../shared/types';
 import { ClinicEmptyIllustration, EditorialAvatar } from './ClinicIllustrations';
 import { ModalShell } from './ModalShell';
@@ -26,6 +36,8 @@ interface PatientsViewProps {
   openCreateSignal: number;
   initialSelectedPatientId?: string | null;
   initialStatusFilter?: string;
+  onOpenPatient?: (patientId: string) => void;
+  sessionRole?: UserRole;
   compactDensity?: boolean;
 }
 
@@ -37,10 +49,13 @@ export function PatientsView({
   openCreateSignal,
   initialSelectedPatientId,
   initialStatusFilter,
+  onOpenPatient,
+  sessionRole = 'administrator',
   compactDensity = false,
 }: PatientsViewProps) {
   const [patients, setPatients] = useState<Patient[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>(initialStatusFilter ?? 'All');
   const [sortField, setSortField] = useState<SortField>('id');
@@ -70,13 +85,18 @@ export function PatientsView({
   const [editError, setEditError] = useState<string | null>(null);
   const [editSubmitting, setEditSubmitting] = useState(false);
 
+  const canWrite = sessionRole === 'administrator';
+
   const loadPatients = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const data = await fetchPatients({ search, status: statusFilter });
       setPatients(data);
     } catch (err) {
-      onErrorNotice(err instanceof Error ? err.message : 'Failed to load patients.');
+      const msg = err instanceof Error ? err.message : 'Failed to load patients.';
+      setLoadError(msg);
+      onErrorNotice(msg);
     } finally {
       setLoading(false);
     }
@@ -95,6 +115,10 @@ export function PatientsView({
 
   const handleSelectPatient = useCallback(
     async (patientId: string) => {
+      if (onOpenPatient) {
+        onOpenPatient(patientId);
+        return;
+      }
       setDetailLoading(true);
       try {
         const detail = await fetchPatientDetail(patientId);
@@ -105,14 +129,14 @@ export function PatientsView({
         setDetailLoading(false);
       }
     },
-    [onErrorNotice]
+    [onErrorNotice, onOpenPatient]
   );
 
   useEffect(() => {
-    if (initialSelectedPatientId) {
+    if (initialSelectedPatientId && !onOpenPatient) {
       handleSelectPatient(initialSelectedPatientId);
     }
-  }, [initialSelectedPatientId, handleSelectPatient]);
+  }, [initialSelectedPatientId, handleSelectPatient, onOpenPatient]);
 
   useEffect(() => {
     if (initialStatusFilter) {
@@ -322,11 +346,13 @@ export function PatientsView({
 
         <button
           type="button"
+          disabled={!canWrite}
+          title={!canWrite ? 'Administrator session required to register new patients' : undefined}
           onClick={() => {
             setFormError(null);
             setShowCreateModal(true);
           }}
-          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg transition-colors whitespace-nowrap shrink-0 btn-press"
+          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg transition-colors whitespace-nowrap shrink-0 btn-press disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <Plus className="w-4 h-4" aria-hidden="true" />
           Register Patient
@@ -350,9 +376,9 @@ export function PatientsView({
           </div>
 
           {loading ? (
-            <div className="p-5 space-y-3" aria-label="Loading patients">
+            <div className="p-5 space-y-3" aria-busy="true" aria-label="Loading patients">
               {Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="flex items-center gap-3 p-2 rounded-lg bg-[#F6F8F6]">
+                <div key={i} className="flex items-center gap-3 p-2 rounded-lg bg-[#F6F8F6] animate-pulse">
                   <div className="w-8 h-8 rounded-full bg-[#E3E8E4] shrink-0" />
                   <div className="flex-1 space-y-1.5">
                     <div className="h-3.5 w-40 bg-[#E3E8E4] rounded" />
@@ -361,6 +387,21 @@ export function PatientsView({
                   <div className="h-3.5 w-20 bg-[#E3E8E4] rounded" />
                 </div>
               ))}
+            </div>
+          ) : loadError ? (
+            <div className="p-10 text-center space-y-3">
+              <AlertTriangle className="w-8 h-8 text-red-700 mx-auto" aria-hidden="true" />
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-[#111C17]">Unable to load patient directory</p>
+                <p className="text-xs text-[#526259] max-w-md mx-auto">{loadError}</p>
+              </div>
+              <button
+                type="button"
+                onClick={loadPatients}
+                className="px-4 py-2 text-xs font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg btn-press"
+              >
+                Retry
+              </button>
             </div>
           ) : sortedPatients.length === 0 ? (
             <div className="p-10 text-center space-y-3">
@@ -386,16 +427,18 @@ export function PatientsView({
                     Clear Filters
                   </button>
                 )}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setFormError(null);
-                    setShowCreateModal(true);
-                  }}
-                  className="px-3.5 py-1.5 text-xs font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg transition-colors btn-press"
-                >
-                  Register Patient
-                </button>
+                {canWrite && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFormError(null);
+                      setShowCreateModal(true);
+                    }}
+                    className="px-3.5 py-1.5 text-xs font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg transition-colors btn-press"
+                  >
+                    Register Patient
+                  </button>
+                )}
               </div>
             </div>
           ) : (
@@ -467,10 +510,11 @@ export function PatientsView({
                         <button
                           type="button"
                           onClick={() => handleSelectPatient(patient.id)}
-                          className="text-xs font-medium text-[#047857] hover:text-[#0B261C] whitespace-nowrap"
-                          aria-label={`View record for ${patient.fullName} (${patient.id})`}
+                          className="inline-flex items-center gap-1 text-xs font-medium text-[#047857] hover:text-[#0B261C] whitespace-nowrap"
+                          aria-label={`Open dedicated profile for ${patient.fullName} (${patient.id})`}
                         >
-                          View Profile
+                          <span>Open Profile</span>
+                          <ArrowUpRight className="w-3.5 h-3.5" aria-hidden="true" />
                         </button>
                       </td>
                     </tr>

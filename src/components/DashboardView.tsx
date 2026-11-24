@@ -15,11 +15,17 @@ import {
 import {
   fetchAppointments,
   fetchDailyReport,
+  fetchDoctorAvailability,
   fetchOverviewReport,
   updateAppointmentRecord,
 } from '../client/api';
 import { CLINIC_CLINICIANS } from '../shared/constants';
-import type { Appointment, DailyReport, OverviewReport } from '../shared/types';
+import type {
+  Appointment,
+  DailyReport,
+  DoctorAvailabilitySummary,
+  OverviewReport,
+} from '../shared/types';
 import {
   AppointmentActivityChart,
   PatientCohortChart,
@@ -31,10 +37,10 @@ import {
   DashboardOpsSpotIllustration,
   EditorialAvatar,
 } from './ClinicIllustrations';
-import { AppointmentStatusText } from './StatusText';
+import { AppointmentStatusText, DoctorDutyStatusText } from './StatusText';
 
 export interface DashboardFilteredTarget {
-  tab: 'assistant' | 'patients' | 'appointments' | 'followups' | 'reports';
+  tab: 'assistant' | 'patients' | 'appointments' | 'followups' | 'reports' | 'staff';
   status?: string;
   date?: string;
   followUpView?: 'pending' | 'overdue' | 'Completed' | 'all';
@@ -43,7 +49,7 @@ export interface DashboardFilteredTarget {
 
 interface DashboardViewProps {
   onNavigate: (
-    tab: 'assistant' | 'patients' | 'appointments' | 'followups' | 'reports'
+    tab: 'assistant' | 'patients' | 'appointments' | 'followups' | 'reports' | 'staff'
   ) => void;
   onNavigateToFiltered?: (target: DashboardFilteredTarget) => void;
   onQuickRegisterPatient?: () => void;
@@ -90,6 +96,7 @@ export function DashboardView({
   const [daily, setDaily] = useState<DailyReport | null>(null);
   const [overview, setOverview] = useState<OverviewReport | null>(null);
   const [calendarDayAppointments, setCalendarDayAppointments] = useState<Appointment[]>([]);
+  const [doctorAvailability, setDoctorAvailability] = useState<DoctorAvailabilitySummary[]>([]);
   const [activeDate, setActiveDate] = useState<string>(getLocalTodayKey);
   const [loading, setLoading] = useState(true);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
@@ -98,14 +105,16 @@ export function DashboardView({
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [dailyData, overviewData, dayApts] = await Promise.all([
+      const [dailyData, overviewData, dayApts, docAvail] = await Promise.all([
         fetchDailyReport(activeDate),
         fetchOverviewReport(),
         fetchAppointments({ date: activeDate }),
+        fetchDoctorAvailability({ date: activeDate }).catch(() => []),
       ]);
       setDaily(dailyData);
       setOverview(overviewData);
       setCalendarDayAppointments(dayApts);
+      setDoctorAvailability(docAvail);
     } catch (err) {
       onErrorNotice(err instanceof Error ? err.message : 'Unable to load dashboard metrics.');
     } finally {
@@ -412,9 +421,7 @@ export function DashboardView({
           <button
             type="button"
             data-testid="kpi-staff-on-duty"
-            onClick={() =>
-              navigateTarget({ tab: 'appointments', date: activeDate, status: 'All' })
-            }
+            onClick={() => navigateTarget({ tab: 'staff' })}
             className="btn-press card-interactive text-left card-surface rounded-xl p-5 flex flex-col justify-between group"
           >
             <div className="flex items-center justify-between gap-2 w-full">
@@ -427,22 +434,35 @@ export function DashboardView({
             </div>
             <div className="mt-2.5 flex items-center justify-between gap-2">
               <span className="text-3xl font-bold font-mono tabular-nums text-[#111C17]">
-                {activeCliniciansToday.length}
+                {doctorAvailability.length > 0
+                  ? doctorAvailability.filter((d) => d.isBookableOnDate).length
+                  : activeCliniciansToday.length}
                 <span className="text-sm font-normal text-[#526259]">
-                  /{CLINIC_CLINICIANS.length}
+                  /{doctorAvailability.length > 0 ? doctorAvailability.length : CLINIC_CLINICIANS.length}
                 </span>
               </span>
               <div className="flex -space-x-1.5" aria-hidden="true">
-                {activeCliniciansToday.slice(0, 4).map((name) => (
-                  <EditorialAvatar key={name} name={name} role="clinician" size="xs" />
-                ))}
+                {(doctorAvailability.length > 0
+                  ? doctorAvailability.filter((d) => d.isBookableOnDate).map((d) => d.fullName)
+                  : activeCliniciansToday
+                )
+                  .slice(0, 4)
+                  .map((name) => (
+                    <EditorialAvatar key={name} name={name} role="clinician" size="xs" />
+                  ))}
               </div>
             </div>
             <div className="mt-3.5 pt-2.5 border-t border-[#EFF3F0] w-full flex items-center justify-between text-[11px]">
               <span className="text-[#34433B] truncate max-w-[165px]">
-                {activeCliniciansToday.length > 0
-                  ? activeCliniciansToday.slice(0, 2).join(', ')
-                  : 'No clinicians scheduled'}
+                {doctorAvailability.length > 0
+                  ? doctorAvailability
+                      .filter((d) => d.isBookableOnDate)
+                      .slice(0, 2)
+                      .map((d) => d.fullName)
+                      .join(', ') || 'No clinicians bookable'
+                  : activeCliniciansToday.length > 0
+                    ? activeCliniciansToday.slice(0, 2).join(', ')
+                    : 'No clinicians scheduled'}
               </span>
               <span className="font-mono text-[#047857] group-hover:underline shrink-0">
                 Roster →
@@ -908,6 +928,73 @@ export function DashboardView({
           </div>
         </div>
       </section>
+
+      {/* Section 6: Clinician Live Duty & Availability */}
+      {doctorAvailability.length > 0 && (
+        <section className="card-surface rounded-xl p-5 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#E3E8E4] pb-3">
+            <div>
+              <h3 className="text-base font-semibold text-[#111C17]">
+                Clinician Live Duty &amp; Availability ({activeDate})
+              </h3>
+              <p className="text-xs text-[#526259] mt-0.5">
+                Real-time operational duty states, shift hours, daily caseload, and next open slots
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => navigateTarget({ tab: 'staff' })}
+              className="text-xs font-medium text-[#047857] hover:text-[#0B261C] whitespace-nowrap shrink-0"
+            >
+              Manage Roster →
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5">
+            {doctorAvailability.map((doc) => (
+              <div
+                key={doc.staffId}
+                className="p-3.5 rounded-xl border border-[#E3E8E4] bg-[#F9FBFA] space-y-2 text-xs"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <EditorialAvatar name={doc.fullName} role="clinician" size="sm" />
+                    <div className="min-w-0">
+                      <div className="font-semibold text-[#111C17] truncate">{doc.fullName}</div>
+                      <div className="text-[11px] text-[#526259] truncate">
+                        {doc.department} · {doc.specialty}
+                      </div>
+                    </div>
+                  </div>
+                  <DoctorDutyStatusText status={doc.effectiveOperationalState} />
+                </div>
+                <div className="flex items-center justify-between text-[11px] font-mono text-[#526259] pt-1 border-t border-[#EEF2EF]">
+                  <span>{doc.workingHoursLabel}</span>
+                  <span>
+                    Load {doc.bookedCount}/{doc.maxDailyCapacity}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="font-mono text-[#047857]">
+                    {doc.nextAvailableSlot
+                      ? `Next open: ${doc.nextAvailableSlot.date} ${doc.nextAvailableSlot.time}`
+                      : 'No open slots on date'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      navigateTarget({ tab: 'appointments', date: activeDate, status: 'All' })
+                    }
+                    className="font-medium text-[#0B261C] hover:text-[#047857] hover:underline whitespace-nowrap"
+                  >
+                    Schedule →
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   );
 }

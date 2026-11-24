@@ -2,7 +2,7 @@ import React from 'react';
 
 interface EditorialAvatarProps {
   name: string;
-  role?: 'patient' | 'clinician';
+  role?: 'patient' | 'clinician' | 'administrator';
   size?: 'xs' | 'sm' | 'md' | 'lg';
 }
 
@@ -37,6 +37,7 @@ export function EditorialAvatar({
 }: EditorialAvatarProps) {
   const tone = AVATAR_TONES[hashName(name) % AVATAR_TONES.length];
   const initials = getInitials(name);
+  const isStaffDark = role === 'clinician' || role === 'administrator';
 
   const sizeClass =
     size === 'xs'
@@ -52,9 +53,9 @@ export function EditorialAvatar({
       aria-hidden="true"
       className={`${sizeClass} rounded-full shrink-0 flex items-center justify-center font-semibold tracking-tight select-none relative`}
       style={{
-        backgroundColor: role === 'clinician' ? '#0B261C' : tone.bg,
-        color: role === 'clinician' ? '#D1FAE5' : tone.ink,
-        boxShadow: `inset 0 0 0 1px ${role === 'clinician' ? '#1A4D3A' : tone.ring}`,
+        backgroundColor: isStaffDark ? '#0B261C' : tone.bg,
+        color: isStaffDark ? '#D1FAE5' : tone.ink,
+        boxShadow: `inset 0 0 0 1px ${isStaffDark ? '#1A4D3A' : tone.ring}`,
       }}
     >
       <span>{initials}</span>

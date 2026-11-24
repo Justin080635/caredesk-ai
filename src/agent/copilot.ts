@@ -1,16 +1,23 @@
 import crypto from 'node:crypto';
 import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 import type {
+  AccountRole,
   Appointment,
+  AppointmentType,
   AssistantPlannedTool,
   AssistantResponse,
   AssistantResponseSection,
   AssistantStreamEvent,
   AvailableSlot,
   DailyReport,
+  DoctorAvailabilitySummary,
+  DoctorDashboardData,
   FollowUpTask,
+  NotificationItem,
   OverviewReport,
   Patient,
+  PatientHomeData,
+  PatientPortalHealthData,
 } from '../shared/types';
 import {
   CLINIC_DEPARTMENTS,
@@ -26,6 +33,9 @@ import {
  * this adapter can be swapped for an MCP client transport without changing agent orchestration.
  */
 export interface CareDeskToolAdapter {
+  role?: AccountRole;
+  linkedStaffId?: string | null;
+  linkedPatientId?: string | null;
   getDailyReport(date?: string): Promise<DailyReport>;
   getOverviewReport(): Promise<OverviewReport>;
   getUnconfirmedAppointments(): Promise<Appointment[]>;
@@ -34,8 +44,11 @@ export interface CareDeskToolAdapter {
   checkAvailability(params: {
     startDate?: string;
     department?: string;
+    specialty?: string;
     clinician?: string;
     patientId?: string;
+    appointmentType?: AppointmentType;
+    timeOfDay?: 'morning' | 'afternoon' | 'any';
     limit?: number;
   }): Promise<AvailableSlot[]>;
   getPatientWithHistory(patientId: string): Promise<{
@@ -55,6 +68,17 @@ export interface CareDeskToolAdapter {
     priority: 'High' | 'Medium' | 'Low';
     dueDate: string;
   }): Promise<FollowUpTask>;
+  getDoctorAvailabilitySummary?(params: {
+    date?: string;
+    department?: string;
+    specialty?: string;
+    appointmentType?: AppointmentType;
+    timeOfDay?: 'morning' | 'afternoon' | 'any';
+  }): Promise<DoctorAvailabilitySummary[]>;
+  getDoctorDashboard?(): Promise<DoctorDashboardData>;
+  getPatientHomeData?(): Promise<PatientHomeData>;
+  getPatientHealthData?(): Promise<PatientPortalHealthData>;
+  getPatientNotifications?(): Promise<NotificationItem[]>;
 }
 
 export interface HandlePromptOptions {
@@ -72,6 +96,7 @@ export type AgentIntent =
   | 'prepare_followup_list'
   | 'followup_queue'
   | 'find_available_slot'
+  | 'doctor_availability'
   | 'reschedule_patient'
   | 'patient_summary'
   | 'non_clinical_refusal'
@@ -122,6 +147,9 @@ export function classifyIntentDeterministically(prompt: string): {
   patientId?: string;
   department?: string;
   days?: number;
+  targetDate?: string;
+  timeOfDay?: 'morning' | 'afternoon' | 'any';
+  appointmentType?: AppointmentType;
 } {
   const trimmed = prompt.trim();
   if (containsClinicalDiagnosisRequest(trimmed)) {
@@ -137,12 +165,53 @@ export function classifyIntentDeterministically(prompt: string): {
     lower.includes(dept.toLowerCase())
   );
 
+  const today = getClinicTodayDate();
+  const targetDate = lower.includes('tomorrow')
+    ? addDaysToDateString(today, 1)
+    : lower.includes('today')
+      ? today
+      : undefined;
+
+  const timeOfDay: 'morning' | 'afternoon' | 'any' = lower.includes('morning')
+    ? 'morning'
+    : lower.includes('afternoon')
+      ? 'afternoon'
+      : 'any';
+
+  const appointmentType: AppointmentType | undefined = lower.includes('new patient')
+    ? 'New Patient'
+    : lower.includes('urgent')
+      ? 'Urgent'
+      : lower.includes('procedure')
+        ? 'Procedure'
+        : lower.includes('follow-up') || lower.includes('followup')
+          ? 'Follow-Up'
+          : undefined;
+
+  if (
+    (lower.includes('which doctor') ||
+      lower.includes('doctors are available') ||
+      lower.includes('doctor availability') ||
+      lower.includes('clinician availability')) &&
+    !lower.includes('reschedule')
+  ) {
+    return {
+      intent: 'doctor_availability',
+      patientId,
+      department: matchedDepartment,
+      days,
+      targetDate,
+      timeOfDay,
+      appointmentType,
+    };
+  }
+
   if (
     lower.includes('reschedule') ||
     lower.includes('move appointment') ||
     lower.includes('rebook')
   ) {
-    return { intent: 'reschedule_patient', patientId, department: matchedDepartment, days };
+    return { intent: 'reschedule_patient', patientId, department: matchedDepartment, days, targetDate, timeOfDay, appointmentType };
   }
 
   if (
@@ -161,7 +230,8 @@ export function classifyIntentDeterministically(prompt: string): {
     lower.includes('follow-up queue') ||
     lower.includes('followup queue') ||
     lower.includes('follow-ups') ||
-    lower.includes('followups')
+    lower.includes('followups') ||
+    lower.includes('follow up')
   ) {
     return { intent: 'followup_queue', patientId, department: matchedDepartment, days };
   }
@@ -187,9 +257,18 @@ export function classifyIntentDeterministically(prompt: string): {
     lower.includes('available') ||
     lower.includes('next slot') ||
     lower.includes('open slot') ||
-    lower.includes('availability')
+    lower.includes('availability') ||
+    lower.includes('book ')
   ) {
-    return { intent: 'find_available_slot', patientId, department: matchedDepartment, days };
+    return {
+      intent: 'find_available_slot',
+      patientId,
+      department: matchedDepartment,
+      days,
+      targetDate,
+      timeOfDay,
+      appointmentType,
+    };
   }
 
   if (
@@ -252,12 +331,7 @@ async function withTimeoutRace<T>(
 async function classifyIntentWithOptionalGemini(
   prompt: string,
   signal?: AbortSignal
-): Promise<{
-  intent: AgentIntent;
-  patientId?: string;
-  department?: string;
-  days?: number;
-}> {
+): Promise<ReturnType<typeof classifyIntentDeterministically>> {
   const deterministic = classifyIntentDeterministically(prompt);
   // Deterministic NLU already resolved a concrete operational intent in <1ms;
   // reserve Gemini intent parsing strictly for ambiguous free-form queries.
@@ -504,6 +578,385 @@ export class CareDeskAgent {
     }
   }
 
+  private async handlePatientScopedPrompt(
+    replyId: string,
+    prompt: string,
+    classification: ReturnType<typeof classifyIntentDeterministically>,
+    options?: HandlePromptOptions
+  ): Promise<AssistantResponse> {
+    const lower = prompt.toLowerCase();
+    const ownPatientId = this.adapter.linkedPatientId;
+
+    // Enforce clinical advice boundary for patients (allow viewing their own published prescriptions/summaries,
+    // but refuse requests to diagnose, interpret labs, or prescribe new medications)
+    const isAskingForMedicalAdvice =
+      lower.includes('diagnose') ||
+      lower.includes('diagnosis') ||
+      lower.includes('what disease') ||
+      lower.includes('is this cancer') ||
+      lower.includes('treatment plan') ||
+      lower.includes('medical advice') ||
+      lower.includes('interpret lab') ||
+      lower.includes('x-ray result') ||
+      /\bprescribe\b/.test(lower);
+
+    if (isAskingForMedicalAdvice) {
+      return {
+        replyId,
+        intent: 'non_clinical_refusal',
+        headline: 'Administrative Scope Only',
+        summary:
+          'CareDesk Assistant cannot evaluate symptoms, interpret clinical labs, recommend treatments, or prescribe medications. Please consult your clinic physician directly.',
+        engine: 'local-nlu-rest',
+        integrationNotice: DEVELOPMENT_NOTICE,
+        mode: 'development-local-rest-preview',
+        plannedTools: [],
+        followUpSuggestions: [
+          'When is my next appointment?',
+          'Show my recent consultation summary and prescriptions.',
+        ],
+        structuredData: { type: 'non_clinical_notice' },
+      };
+    }
+
+    // Enforce strict patient isolation inside the assistant
+    if (
+      (classification.patientId && ownPatientId && classification.patientId !== ownPatientId) ||
+      lower.includes('clinic briefing') ||
+      lower.includes('other patient') ||
+      lower.includes('all patients') ||
+      lower.includes('staff roster') ||
+      lower.includes('doctor utilization')
+    ) {
+      return {
+        replyId,
+        intent: 'non_clinical_refusal',
+        headline: 'Patient Portal Scope Only',
+        summary:
+          'Your Patient Portal assistant can only access your own appointments, published consultation summaries, prescriptions, notifications, and open clinic booking slots.',
+        engine: 'local-nlu-rest',
+        integrationNotice: DEVELOPMENT_NOTICE,
+        mode: 'development-local-rest-preview',
+        plannedTools: [],
+        followUpSuggestions: [
+          'When is my next appointment?',
+          'Show my recent consultation summary and prescriptions.',
+          'What appointment slots are available this week?',
+        ],
+        structuredData: { type: 'non_clinical_notice' },
+      };
+    }
+
+    const plannedTools: AssistantPlannedTool[] = [];
+
+    if (
+      lower.includes('notification') ||
+      lower.includes('alert') ||
+      lower.includes('message')
+    ) {
+      const notes = this.adapter.getPatientNotifications
+        ? await this.runTrackedTool(
+            'get_patient_notifications',
+            'GET /api/notifications',
+            'Retrieving your personal clinic notifications',
+            plannedTools,
+            () => this.adapter.getPatientNotifications!(),
+            (list) => `${list.length} notification(s) found`,
+            options
+          )
+        : [];
+      const unread = notes.filter((n) => !n.isRead).length;
+      return {
+        replyId,
+        intent: 'patient_notifications',
+        headline: `${unread} Unread Notification${unread === 1 ? '' : 's'} (${notes.length} Total)`,
+        summary:
+          notes.length === 0
+            ? 'You have no notifications from the clinic.'
+            : `Latest notice: ${notes[0].title} — ${notes[0].message}`,
+        followUpSuggestions: [
+          'When is my next appointment?',
+          'Show my recent consultation summary and prescriptions.',
+        ],
+        engine: 'local-nlu-rest',
+        integrationNotice: DEVELOPMENT_NOTICE,
+        mode: 'development-local-rest-preview',
+        plannedTools,
+        structuredData: { type: 'patient_appointments', items: notes },
+      };
+    }
+
+    if (
+      lower.includes('consultation') ||
+      lower.includes('prescription') ||
+      lower.includes('medication') ||
+      lower.includes('test result') ||
+      lower.includes('health') ||
+      lower.includes('care plan')
+    ) {
+      const health = this.adapter.getPatientHealthData
+        ? await this.runTrackedTool(
+            'get_patient_health_summary',
+            'GET /api/patient-portal/health',
+            'Retrieving your doctor-published consultation summaries, prescriptions, and test results',
+            plannedTools,
+            () => this.adapter.getPatientHealthData!(),
+            (h) => `${h.consultations.length} consultation(s), ${h.prescriptions.length} prescription(s)`,
+            options
+          )
+        : null;
+
+      if (!health || health.consultations.length === 0) {
+        return {
+          replyId,
+          intent: 'patient_health_summary',
+          headline: 'No Published Consultation Summaries Yet',
+          summary:
+            'Your clinicians have not published any consultation summaries to your portal yet. Only verified clinic-authored summaries appear here.',
+          followUpSuggestions: [
+            'When is my next appointment?',
+            'What appointment slots are available this week?',
+          ],
+          engine: 'local-nlu-rest',
+          integrationNotice: DEVELOPMENT_NOTICE,
+          mode: 'development-local-rest-preview',
+          plannedTools,
+          structuredData: { type: 'consultation_summary', items: [] },
+        };
+      }
+
+      const latest = health.consultations[0];
+      return {
+        replyId,
+        intent: 'patient_health_summary',
+        headline: `${health.consultations.length} Consultation Summary${health.consultations.length === 1 ? '' : 'ies'} on File`,
+        summary: `Most recent visit on ${latest.consultationDate} with ${latest.doctorName}: ${latest.summary} (${health.prescriptions.length} prescription item${health.prescriptions.length === 1 ? '' : 's'}, ${health.testResults.length} test result${health.testResults.length === 1 ? '' : 's'}).`,
+        sections: [
+          {
+            id: 'latest-consultation',
+            title: `Latest Consultation (${latest.consultationDate} · ${latest.doctorName})`,
+            body: latest.summary,
+            bullets: [
+              ...(latest.recommendations ? [`Care Recommendation: ${latest.recommendations}`] : []),
+              ...health.prescriptions.slice(0, 3).map((rx) => `Rx: ${rx.medication} (${rx.dosage}, ${rx.frequency})`),
+            ],
+          },
+        ],
+        followUpSuggestions: [
+          'When is my next appointment?',
+          'What appointment slots are available this week?',
+        ],
+        engine: 'local-nlu-rest',
+        integrationNotice: DEVELOPMENT_NOTICE,
+        mode: 'development-local-rest-preview',
+        plannedTools,
+        structuredData: {
+          type: 'consultation_summary',
+          items: health.consultations,
+          metrics: {
+            consultations: health.consultations.length,
+            prescriptions: health.prescriptions.length,
+            testResults: health.testResults.length,
+          },
+        },
+      };
+    }
+
+    if (
+      classification.intent === 'find_available_slot' ||
+      classification.intent === 'doctor_availability' ||
+      lower.includes('book') ||
+      lower.includes('reschedule')
+    ) {
+      const slots = await this.runTrackedTool(
+        'check_patient_booking_availability',
+        'GET /api/patient-portal/availability',
+        `Checking open appointment slots${classification.department ? ` in ${classification.department}` : ''}`,
+        plannedTools,
+        () =>
+          this.adapter.checkAvailability({
+            startDate: classification.targetDate ?? getClinicTodayDate(),
+            department: classification.department,
+            appointmentType: classification.appointmentType,
+            timeOfDay: classification.timeOfDay,
+            limit: 8,
+          }),
+        (list) => `${list.length} open slot(s) available`,
+        options
+      );
+      return {
+        replyId,
+        intent: 'find_available_slot',
+        headline:
+          slots.length > 0
+            ? `${slots.length} Open Appointment Slot${slots.length === 1 ? '' : 's'} Found`
+            : 'No Matching Slots Found',
+        summary:
+          slots.length > 0
+            ? `Earliest available slot is ${slots[0].date} at ${slots[0].time} with ${slots[0].clinician} (${slots[0].department}). Use My Appointments in the portal to book or request a reschedule.`
+            : 'No open slots matched your criteria over the upcoming week.',
+        followUpSuggestions: ['When is my next appointment?', 'Show my notifications.'],
+        engine: 'local-nlu-rest',
+        integrationNotice: DEVELOPMENT_NOTICE,
+        mode: 'development-local-rest-preview',
+        plannedTools,
+        structuredData: { type: 'available_slots', items: slots },
+      };
+    }
+
+    if (this.adapter.getPatientHomeData) {
+      const home = await this.runTrackedTool(
+        'get_patient_home_summary',
+        'GET /api/patient-portal/home',
+        'Retrieving your upcoming appointments and open care follow-ups',
+        plannedTools,
+        () => this.adapter.getPatientHomeData!(),
+        (h) => `${h.upcomingAppointments.length} upcoming appointment(s), ${h.openFollowups.length} open follow-up(s)`,
+        options
+      );
+
+      const next = home.nextAppointment;
+      return {
+        replyId,
+        intent: 'patient_appointments',
+        headline: next
+          ? `Next Visit: ${next.appointmentDate} at ${next.appointmentTime}`
+          : 'No Upcoming Appointments Scheduled',
+        summary: next
+          ? `Your next visit is with ${next.clinician} (${next.department}) on ${next.appointmentDate} at ${next.appointmentTime} (${next.status}). You have ${home.upcomingAppointments.length} upcoming visit(s) and ${home.unreadNotificationsCount} unread notification(s).`
+          : `You have no upcoming appointments scheduled at ${home.clinic.name}. You can check open clinic slots or book directly under My Appointments.`,
+        followUpSuggestions: [
+          'What appointment slots are available this week?',
+          'Show my recent consultation summary and prescriptions.',
+          'Show my notifications.',
+        ],
+        engine: 'local-nlu-rest',
+        integrationNotice: DEVELOPMENT_NOTICE,
+        mode: 'development-local-rest-preview',
+        plannedTools,
+        structuredData: {
+          type: 'patient_appointments',
+          patient: home.patient,
+          items: home.upcomingAppointments,
+          metrics: {
+            upcoming: home.upcomingAppointments.length,
+            openFollowups: home.openFollowups.length,
+            unreadNotifications: home.unreadNotificationsCount,
+          },
+        },
+      };
+    }
+
+    return {
+      replyId,
+      intent: 'general_help',
+      headline: 'CareDesk Patient Assistant',
+      summary:
+        'Ask about your upcoming appointments, open booking slots by specialty, doctor-published consultation summaries and prescriptions, or your notifications.',
+      engine: 'local-nlu-rest',
+      integrationNotice: DEVELOPMENT_NOTICE,
+      mode: 'development-local-rest-preview',
+      plannedTools: [],
+    };
+  }
+
+  private async handleDoctorScopedPrompt(
+    replyId: string,
+    prompt: string,
+    classification: ReturnType<typeof classifyIntentDeterministically>,
+    options?: HandlePromptOptions
+  ): Promise<AssistantResponse | null> {
+    const lower = prompt.toLowerCase();
+    const isPersonalDoctorQuery =
+      lower.includes('my ') ||
+      lower.includes('next consultation') ||
+      lower.includes('my schedule') ||
+      lower.includes('duty status');
+
+    if (!isPersonalDoctorQuery || !this.adapter.getDoctorDashboard) {
+      return null;
+    }
+
+    const plannedTools: AssistantPlannedTool[] = [];
+    const dashboard = await this.runTrackedTool(
+      'get_doctor_dashboard',
+      'GET /api/doctor/dashboard',
+      'Loading your personal clinician schedule, today’s patient queue, and assigned follow-ups',
+      plannedTools,
+      () => this.adapter.getDoctorDashboard!(),
+      (d) => `${d.todayAppointments.length} today visit(s), ${d.followupsRequiringAttention.length} follow-up(s)`,
+      options
+    );
+
+    if (classification.intent === 'followup_queue' || lower.includes('follow')) {
+      const fups = dashboard.followupsRequiringAttention;
+      return {
+        replyId,
+        intent: 'followup_queue',
+        headline: `${fups.length} Follow-Up Task${fups.length === 1 ? '' : 's'} Requiring Your Attention`,
+        summary:
+          fups.length === 0
+            ? 'All follow-up items assigned to your caseload are currently closed.'
+            : `You have ${fups.length} active follow-up(s) across your caseload (${fups.filter((f) => f.priority === 'High').length} high priority).`,
+        followUpSuggestions: [
+          'What is my schedule today?',
+          'Who is my next scheduled patient?',
+        ],
+        engine: 'local-nlu-rest',
+        integrationNotice: DEVELOPMENT_NOTICE,
+        mode: 'development-local-rest-preview',
+        plannedTools,
+        structuredData: {
+          type: 'followup_queue',
+          items: fups,
+          metrics: {
+            openFollowups: fups.length,
+            pendingConsultations: dashboard.pendingConsultationsCount,
+          },
+        },
+      };
+    }
+
+    return {
+      replyId,
+      intent: 'doctor_schedule',
+      headline: `${dashboard.doctor.fullName} — Schedule for ${dashboard.todayDate} (${dashboard.effectiveOperationalState})`,
+      summary: dashboard.nextAppointment
+        ? `You have ${dashboard.todayAppointments.length} appointment(s) today and ${dashboard.pendingConsultationsCount} visit(s) awaiting consultation documentation. Next patient: ${dashboard.nextAppointment.patientName ?? dashboard.nextAppointment.patientId} at ${dashboard.nextAppointment.appointmentTime}.`
+        : `You have ${dashboard.todayAppointments.length} appointment(s) today, ${dashboard.assignedPatientsCount} assigned patients, and ${dashboard.followupsRequiringAttention.length} follow-up(s) requiring attention.`,
+      sections: [
+        {
+          id: 'doctor-today',
+          title: 'Today’s Operational Queue',
+          bullets: [
+            `Duty Status: ${dashboard.effectiveOperationalState}`,
+            `Today’s Visits: ${dashboard.todayAppointments.length}`,
+            `Pending Consultation Summaries: ${dashboard.pendingConsultationsCount}`,
+            `Follow-ups Requiring Attention: ${dashboard.followupsRequiringAttention.length}`,
+          ],
+        },
+      ],
+      followUpSuggestions: [
+        'Show my follow-ups requiring attention.',
+        'Check open slots this week.',
+      ],
+      engine: 'local-nlu-rest',
+      integrationNotice: DEVELOPMENT_NOTICE,
+      mode: 'development-local-rest-preview',
+      plannedTools,
+      structuredData: {
+        type: 'doctor_schedule',
+        items: dashboard.todayAppointments,
+        metrics: {
+          todayVisits: dashboard.todayAppointments.length,
+          assignedPatients: dashboard.assignedPatientsCount,
+          pendingConsultations: dashboard.pendingConsultationsCount,
+          attentionFollowups: dashboard.followupsRequiringAttention.length,
+        },
+      },
+    };
+  }
+
   async handlePrompt(
     prompt: string,
     options?: HandlePromptOptions
@@ -517,11 +970,36 @@ export class CareDeskAgent {
       message: 'Interpreting administrative request...',
     });
 
-    const { intent, patientId, department, days } = await classifyIntentWithOptionalGemini(
+    const classification = await classifyIntentWithOptionalGemini(
       prompt,
       options?.signal
     );
+    const { intent, patientId, department, days, targetDate, timeOfDay, appointmentType } =
+      classification;
     throwIfAborted(options?.signal);
+
+    if (this.adapter.role === 'Patient') {
+      options?.onEvent?.({
+        type: 'status',
+        phase: 'querying',
+        message: 'Querying your CareDesk Patient Portal records...',
+      });
+      const patientResponse = await this.handlePatientScopedPrompt(
+        replyId,
+        prompt,
+        classification,
+        options
+      );
+      if (patientResponse.intent !== 'non_clinical_refusal') {
+        const geminiMarkdown = await streamGroundedGeminiSummary(prompt, patientResponse, options);
+        if (geminiMarkdown) {
+          patientResponse.markdown = geminiMarkdown;
+          patientResponse.engine = 'gemini-streaming-rest';
+        }
+      }
+      options?.onEvent?.({ type: 'complete', response: patientResponse });
+      return patientResponse;
+    }
 
     if (intent === 'non_clinical_refusal') {
       const refusal: AssistantResponse = {
@@ -555,7 +1033,106 @@ export class CareDeskAgent {
 
     let response: AssistantResponse;
 
-    if (intent === 'daily_briefing') {
+    if (this.adapter.role === 'Doctor') {
+      const doctorResponse = await this.handleDoctorScopedPrompt(
+        replyId,
+        prompt,
+        classification,
+        options
+      );
+      if (doctorResponse) {
+        const geminiMarkdown = await streamGroundedGeminiSummary(prompt, doctorResponse, options);
+        if (geminiMarkdown) {
+          doctorResponse.markdown = geminiMarkdown;
+          doctorResponse.engine = 'gemini-streaming-rest';
+        }
+        options?.onEvent?.({ type: 'complete', response: doctorResponse });
+        return doctorResponse;
+      }
+    }
+
+    if (intent === 'doctor_availability') {
+      const plannedTools: AssistantPlannedTool[] = [];
+      const queryDate = targetDate ?? getClinicTodayDate();
+      if (this.adapter.getDoctorAvailabilitySummary) {
+        const summaries = await this.runTrackedTool(
+          'get_doctor_availability_summary',
+          `GET /api/doctors/availability?date=${queryDate}`,
+          `Checking clinician availability on ${queryDate}${department ? ` in ${department}` : ''}${timeOfDay && timeOfDay !== 'any' ? ` (${timeOfDay})` : ''}`,
+          plannedTools,
+          () =>
+            this.adapter.getDoctorAvailabilitySummary!({
+              date: queryDate,
+              department,
+              appointmentType,
+              timeOfDay,
+            }),
+          (list) => `${list.filter((d) => d.isBookableOnDate).length} of ${list.length} clinician(s) bookable on ${queryDate}`,
+          options
+        );
+        const bookable = summaries.filter((d) => d.isBookableOnDate);
+        response = {
+          replyId,
+          intent,
+          headline: `${bookable.length} Clinician${bookable.length === 1 ? '' : 's'} Available on ${queryDate}${timeOfDay && timeOfDay !== 'any' ? ` (${timeOfDay})` : ''}`,
+          summary:
+            bookable.length > 0
+              ? `${bookable.map((b) => `${b.fullName} (${b.department}, ${b.availableSlots.length} open slot(s))`).join('; ')}.`
+              : `No clinicians matched open slots on ${queryDate}${department ? ` in ${department}` : ''}.`,
+          followUpSuggestions: [
+            'Find the next available appointment slot.',
+            "Give me today's clinic briefing.",
+          ],
+          engine: 'local-nlu-rest',
+          integrationNotice: DEVELOPMENT_NOTICE,
+          mode: 'development-local-rest-preview',
+          plannedTools,
+          structuredData: {
+            type: 'doctor_availability',
+            items: summaries,
+            metrics: {
+              date: queryDate,
+              bookableClinicians: bookable.length,
+              totalClinicians: summaries.length,
+            },
+          },
+        };
+      } else {
+        const slots = await this.runTrackedTool(
+          'check_appointment_availability',
+          'GET /api/appointments/availability',
+          `Checking open slots on ${queryDate}`,
+          plannedTools,
+          () =>
+            this.adapter.checkAvailability({
+              startDate: queryDate,
+              department,
+              appointmentType,
+              timeOfDay,
+              limit: 8,
+            }),
+          (list) => `${list.length} open slot(s)`,
+          options
+        );
+        response = {
+          replyId,
+          intent: 'find_available_slot',
+          headline:
+            slots.length > 0
+              ? `Next Available Appointment Slot: ${slots[0].date} at ${slots[0].time}`
+              : 'No Open Appointment Slots Found',
+          summary:
+            slots.length > 0
+              ? `Found ${slots.length} conflict-free slots starting ${slots[0].date} at ${slots[0].time} (${slots[0].clinician}).`
+              : 'No open slots matched.',
+          engine: 'local-nlu-rest',
+          integrationNotice: DEVELOPMENT_NOTICE,
+          mode: 'development-local-rest-preview',
+          plannedTools,
+          structuredData: { type: 'available_slots', items: slots },
+        };
+      }
+    } else if (intent === 'daily_briefing') {
       const plannedTools: AssistantPlannedTool[] = [];
       const [daily, overview] = await Promise.all([
         this.runTrackedTool(
@@ -965,7 +1542,7 @@ export class CareDeskAgent {
 
       const missedCount = history.appointments.filter((a) => a.status === 'Missed').length;
       const openFollowUps = history.followups.filter(
-        (f) => f.status === 'Pending' || f.status === 'In Progress'
+        (f) => f.status !== 'Completed' && f.status !== 'Cancelled'
       ).length;
 
       response = {

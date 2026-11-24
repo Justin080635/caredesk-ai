@@ -1,16 +1,22 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { AdministrativeStatus, Patient } from '../../shared/types';
+import { DEFAULT_DEMO_CLINIC_ID } from '../db/database';
 import { getClinicTodayDate, isValidDateString, isValidEmail } from '../domain/rules';
 import { recordAuditEvent } from './auditService';
 
 interface PatientRow {
   id: string;
+  clinic_id: string;
   full_name: string;
   date_of_birth: string;
   contact_number: string;
   email: string;
   registration_date: string;
   administrative_status: AdministrativeStatus;
+  linked_user_id: string | null;
+  emergency_contact_name: string;
+  emergency_contact_phone: string;
+  portal_linked_at: string;
   created_at: string;
 }
 
@@ -29,6 +35,10 @@ function mapPatientRow(row: PatientRow): Patient {
     email: row.email,
     registrationDate: row.registration_date,
     administrativeStatus: row.administrative_status,
+    emergencyContactName: row.emergency_contact_name ?? '',
+    emergencyContactPhone: row.emergency_contact_phone ?? '',
+    portalLinked: Boolean(row.linked_user_id),
+    portalLinkedAt: row.portal_linked_at ?? '',
     createdAt: row.created_at,
   };
 }
@@ -46,12 +56,20 @@ export class ServiceError extends Error {
   }
 }
 
+const PATIENT_SELECT = `
+  SELECT id, clinic_id, full_name, date_of_birth, contact_number, email,
+         registration_date, administrative_status, linked_user_id,
+         emergency_contact_name, emergency_contact_phone, portal_linked_at, created_at
+  FROM patients
+`;
+
 export function listPatients(
   db: DatabaseSync,
-  filters?: { search?: string; status?: string }
+  filters?: { clinicId?: string; search?: string; status?: string }
 ): Patient[] {
-  const conditions: string[] = [];
-  const params: Array<string> = [];
+  const clinicId = filters?.clinicId ?? DEFAULT_DEMO_CLINIC_ID;
+  const conditions: string[] = ['clinic_id = ?'];
+  const params: Array<string> = [clinicId];
 
   if (filters?.search && filters.search.trim().length > 0) {
     const q = `%${filters.search.trim().toLowerCase()}%`;
@@ -64,11 +82,10 @@ export function listPatients(
     params.push(filters.status);
   }
 
-  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  const whereClause = `WHERE ${conditions.join(' AND ')}`;
   const rows = db
     .prepare(
-      `SELECT id, full_name, date_of_birth, contact_number, email, registration_date, administrative_status, created_at
-       FROM patients
+      `${PATIENT_SELECT}
        ${whereClause}
        ORDER BY id ASC`
     )
@@ -77,22 +94,25 @@ export function listPatients(
   return rows.map(mapPatientRow);
 }
 
-export function getPatientById(db: DatabaseSync, patientId: string): Patient {
+export function getPatientById(
+  db: DatabaseSync,
+  patientId: string,
+  clinicId = DEFAULT_DEMO_CLINIC_ID
+): Patient {
   const row = db
     .prepare(
-      `SELECT id, full_name, date_of_birth, contact_number, email, registration_date, administrative_status, created_at
-       FROM patients
-       WHERE id = ?`
+      `${PATIENT_SELECT}
+       WHERE id = ? AND clinic_id = ?`
     )
-    .get(patientId) as PatientRow | undefined;
+    .get(patientId, clinicId) as PatientRow | undefined;
 
   if (!row) {
-    throw new ServiceError(404, 'PATIENT_NOT_FOUND', `Patient ${patientId} was not found.`);
+    throw new ServiceError(404, 'PATIENT_NOT_FOUND', `Patient ${patientId} was not found in this clinic.`);
   }
   return mapPatientRow(row);
 }
 
-function generateNextPatientId(db: DatabaseSync): string {
+export function generateNextPatientId(db: DatabaseSync): string {
   const rows = db.prepare('SELECT id FROM patients').all() as Array<{ id: string }>;
   let maxNum = 1000;
   for (const r of rows) {
@@ -111,18 +131,23 @@ export interface RegisterPatientInput {
   contactNumber: string;
   email: string;
   administrativeStatus?: AdministrativeStatus;
+  emergencyContactName?: string;
+  emergencyContactPhone?: string;
 }
 
 export function registerPatient(
   db: DatabaseSync,
   input: RegisterPatientInput,
-  actor = 'Clinic Administrator'
+  actor = 'Clinic Administrator',
+  clinicId = DEFAULT_DEMO_CLINIC_ID
 ): Patient {
   const fullName = (input.fullName ?? '').trim();
   const dateOfBirth = (input.dateOfBirth ?? '').trim();
   const contactNumber = (input.contactNumber ?? '').trim();
   const email = (input.email ?? '').trim();
   const administrativeStatus: AdministrativeStatus = input.administrativeStatus ?? 'Active';
+  const emergencyContactName = (input.emergencyContactName ?? '').trim();
+  const emergencyContactPhone = (input.emergencyContactPhone ?? '').trim();
 
   if (fullName.length < 2) {
     throw new ServiceError(400, 'VALIDATION_ERROR', 'Full name must be at least 2 characters.');
@@ -146,20 +171,33 @@ export function registerPatient(
 
   db.prepare(`
     INSERT INTO patients (
-      id, full_name, date_of_birth, contact_number, email,
-      registration_date, administrative_status, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(id, fullName, dateOfBirth, contactNumber, email, registrationDate, administrativeStatus, createdAt);
+      id, clinic_id, full_name, date_of_birth, contact_number, email,
+      registration_date, administrative_status, emergency_contact_name, emergency_contact_phone, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    clinicId,
+    fullName,
+    dateOfBirth,
+    contactNumber,
+    email,
+    registrationDate,
+    administrativeStatus,
+    emergencyContactName,
+    emergencyContactPhone,
+    createdAt
+  );
 
   recordAuditEvent(db, {
+    clinicId,
     actor,
     action: 'REGISTER_PATIENT',
     resourceType: 'patient',
     resourceId: id,
-    summary: `Registered synthetic patient ${fullName} (${id}) with status ${administrativeStatus}.`,
+    summary: `Registered patient ${fullName} (${id}) with status ${administrativeStatus}.`,
   });
 
-  return getPatientById(db, id);
+  return getPatientById(db, id, clinicId);
 }
 
 export interface UpdatePatientInput {
@@ -168,15 +206,18 @@ export interface UpdatePatientInput {
   contactNumber?: string;
   email?: string;
   administrativeStatus?: AdministrativeStatus;
+  emergencyContactName?: string;
+  emergencyContactPhone?: string;
 }
 
 export function updatePatient(
   db: DatabaseSync,
   patientId: string,
   patch: UpdatePatientInput,
-  actor = 'Clinic Administrator'
+  actor = 'Clinic Administrator',
+  clinicId = DEFAULT_DEMO_CLINIC_ID
 ): Patient {
-  const existing = getPatientById(db, patientId);
+  const existing = getPatientById(db, patientId, clinicId);
 
   const nextName = patch.fullName !== undefined ? patch.fullName.trim() : existing.fullName;
   const nextDob = patch.dateOfBirth !== undefined ? patch.dateOfBirth.trim() : existing.dateOfBirth;
@@ -185,6 +226,14 @@ export function updatePatient(
   const nextEmail = patch.email !== undefined ? patch.email.trim() : existing.email;
   const nextStatus: AdministrativeStatus =
     patch.administrativeStatus ?? existing.administrativeStatus;
+  const nextEmergencyName =
+    patch.emergencyContactName !== undefined
+      ? patch.emergencyContactName.trim()
+      : (existing.emergencyContactName ?? '');
+  const nextEmergencyPhone =
+    patch.emergencyContactPhone !== undefined
+      ? patch.emergencyContactPhone.trim()
+      : (existing.emergencyContactPhone ?? '');
 
   if (nextName.length < 2) {
     throw new ServiceError(400, 'VALIDATION_ERROR', 'Full name must be at least 2 characters.');
@@ -208,11 +257,24 @@ export function updatePatient(
         date_of_birth = ?,
         contact_number = ?,
         email = ?,
-        administrative_status = ?
-    WHERE id = ?
-  `).run(nextName, nextDob, nextContact, nextEmail, nextStatus, patientId);
+        administrative_status = ?,
+        emergency_contact_name = ?,
+        emergency_contact_phone = ?
+    WHERE id = ? AND clinic_id = ?
+  `).run(
+    nextName,
+    nextDob,
+    nextContact,
+    nextEmail,
+    nextStatus,
+    nextEmergencyName,
+    nextEmergencyPhone,
+    patientId,
+    clinicId
+  );
 
   recordAuditEvent(db, {
+    clinicId,
     actor,
     action: 'UPDATE_PATIENT',
     resourceType: 'patient',
@@ -220,5 +282,5 @@ export function updatePatient(
     summary: `Updated patient ${nextName} (${patientId}) · Status: ${nextStatus}.`,
   });
 
-  return getPatientById(db, patientId);
+  return getPatientById(db, patientId, clinicId);
 }

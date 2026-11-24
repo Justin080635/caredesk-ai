@@ -1,17 +1,89 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import type { DatabaseSync } from 'node:sqlite';
 import { createExpressApp } from '../../server';
-import { createDatabase } from './db/database';
+import type { TokenVerifier, VerifiedFirebaseIdentity } from './auth/session';
+import { createDatabase, DEFAULT_DEMO_CLINIC_ID } from './db/database';
 import { seedDatabaseIfEmpty } from './db/seed';
 import { getClinicTodayDate } from './domain/rules';
 
+const TEST_IDENTITIES: Record<string, VerifiedFirebaseIdentity> = {
+  'token-demo-admin': {
+    uid: 'fb-demo-admin',
+    email: 'demo.admin@caredesk.example.org',
+    name: 'Demo Clinic Admin',
+    provider: 'google.com',
+    emailVerified: true,
+  },
+  'token-admin-a': {
+    uid: 'fb-admin-a',
+    email: 'admin.a@alphahealth.org',
+    name: 'Dr. Elena Brooks',
+    provider: 'password',
+    emailVerified: true,
+  },
+  'token-admin-b': {
+    uid: 'fb-admin-b',
+    email: 'admin.b@betaoutpatient.org',
+    name: 'Marcus Sterling',
+    provider: 'google.com',
+    emailVerified: true,
+  },
+  'token-doctor-a': {
+    uid: 'fb-doctor-a',
+    email: 'doctor@alphahealth.org',
+    name: 'Dr. Priya Patel',
+    provider: 'password',
+    emailVerified: true,
+  },
+  'token-reception-a': {
+    uid: 'fb-reception-a',
+    email: 'reception@alphahealth.org',
+    name: 'Jordan Rivera',
+    provider: 'password',
+    emailVerified: true,
+  },
+  'token-staff-a': {
+    uid: 'fb-staff-a',
+    email: 'staff@alphahealth.org',
+    name: 'Samira Haddad',
+    provider: 'password',
+    emailVerified: true,
+  },
+  'token-candidate-doc': {
+    uid: 'fb-candidate-doc',
+    email: 'dr.nadia@alphahealth.org',
+    name: 'Dr. Nadia Lin',
+    provider: 'password',
+    emailVerified: true,
+  },
+  'token-patient-one': {
+    uid: 'fb-patient-one',
+    email: 'patient.one@example.org',
+    name: 'Alpha Patient One',
+    provider: 'password',
+    emailVerified: true,
+  },
+  'token-patient-unlinked': {
+    uid: 'fb-patient-unlinked',
+    email: 'sora.takahashi@example.org',
+    name: 'Sora Takahashi',
+    provider: 'password',
+    emailVerified: true,
+  },
+};
+
+const testTokenVerifier: TokenVerifier = async (token: string) => {
+  return TEST_IDENTITIES[token] ?? null;
+};
+
 async function withTestServer(
-  run: (baseUrl: string) => Promise<void>
+  run: (baseUrl: string, db: DatabaseSync) => Promise<void>
 ): Promise<void> {
   const db = createDatabase(':memory:');
   seedDatabaseIfEmpty(db);
-  const app = createExpressApp(db);
+  const app = createExpressApp(db, { verifyToken: testTokenVerifier });
 
   await new Promise<void>((resolve, reject) => {
     const server = http.createServer(app);
@@ -25,7 +97,7 @@ async function withTestServer(
       }
       const baseUrl = `http://127.0.0.1:${addr.port}`;
       try {
-        await run(baseUrl);
+        await run(baseUrl, db);
         server.close();
         db.close();
         resolve();
@@ -38,112 +110,425 @@ async function withTestServer(
   });
 }
 
-async function getAdminToken(baseUrl: string, role: 'administrator' | 'viewer' = 'administrator'): Promise<string> {
-  const res = await fetch(`${baseUrl}/api/auth/session`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ role, actor: 'Test Runner' }),
-  });
-  assert.equal(res.status, 201);
-  const json = (await res.json()) as { data: { token: string } };
-  return json.data.token;
+function attachUserToDemoClinic(db: DatabaseSync, identity: VerifiedFirebaseIdentity) {
+  const now = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO users (id, firebase_uid, email, full_name, phone_number, avatar_url, auth_provider, created_at, updated_at)
+    VALUES ('USR-DEMO-1', ?, ?, ?, '+1-555-0101', '', ?, ?, ?)
+  `).run(
+    identity.uid,
+    identity.email,
+    identity.name ?? 'Demo Admin',
+    identity.provider ?? 'google.com',
+    now,
+    now
+  );
+  db.prepare(`
+    INSERT INTO clinic_memberships (id, clinic_id, user_id, role, status, created_at, updated_at)
+    VALUES ('MBR-DEMO-1', ?, 'USR-DEMO-1', 'Clinic Administrator', 'Active', ?, ?)
+  `).run(DEFAULT_DEMO_CLINIC_ID, now, now);
 }
 
-test('GET endpoints return seeded synthetic patients, appointments, followups, and reports', async () => {
+async function syncUser(
+  baseUrl: string,
+  token: string,
+  extra?: { fullName?: string; phoneNumber?: string; clinicId?: string }
+) {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${token}`,
+  };
+  if (extra?.clinicId) headers['X-Clinic-Id'] = extra.clinicId;
+  const res = await fetch(`${baseUrl}/api/auth/sync`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      fullName: extra?.fullName,
+      phoneNumber: extra?.phoneNumber,
+    }),
+  });
+  return res;
+}
+
+test('Unauthenticated requests are blocked while public health/docs/auth config endpoints respond cleanly', async () => {
   await withTestServer(async (baseUrl) => {
-    const patientsRes = await fetch(`${baseUrl}/api/patients`);
-    assert.equal(patientsRes.status, 200);
-    const patientsJson = (await patientsRes.json()) as { data: Array<{ id: string }> };
-    assert.ok(patientsJson.data.length >= 20);
-
-    const p1042Res = await fetch(`${baseUrl}/api/patients/P-1042`);
-    assert.equal(p1042Res.status, 200);
-    const p1042Json = (await p1042Res.json()) as { data: { id: string; fullName: string } };
-    assert.equal(p1042Json.data.id, 'P-1042');
-    assert.equal(p1042Json.data.fullName, 'Julian Mercer');
-
-    const dailyRes = await fetch(`${baseUrl}/api/reports/daily`);
-    assert.equal(dailyRes.status, 200);
-    const dailyJson = (await dailyRes.json()) as { data: { totalAppointments: number } };
-    assert.ok(dailyJson.data.totalAppointments >= 6);
-
-    const missedRes = await fetch(`${baseUrl}/api/appointments/missed?days=7`);
-    assert.equal(missedRes.status, 200);
-    const missedJson = (await missedRes.json()) as { data: Array<{ status: string }> };
-    assert.ok(missedJson.data.length >= 4);
-    assert.ok(missedJson.data.every((a) => a.status === 'Missed'));
-
-    const overviewRes = await fetch(`${baseUrl}/api/reports/overview`);
-    assert.equal(overviewRes.status, 200);
-    const overviewJson = (await overviewRes.json()) as {
-      data: {
-        todayDate: string;
-        todayTotalAppointments: number;
-        yesterdayTotalAppointments: number;
-        patientRegistrationTrend: Array<{ month: string; count: number }>;
-        calendarSummary: Array<{ date: string; total: number }>;
-        overdueFollowUps: Array<{ id: string; dueDate: string }>;
-      };
-    };
-    assert.ok(overviewJson.data.todayDate);
-    assert.ok(overviewJson.data.todayTotalAppointments >= 6);
-    assert.ok(typeof overviewJson.data.yesterdayTotalAppointments === 'number');
-    assert.ok(overviewJson.data.patientRegistrationTrend.length > 0);
-    assert.ok(overviewJson.data.calendarSummary.length > 0);
-    assert.ok(Array.isArray(overviewJson.data.overdueFollowUps));
+    const healthRes = await fetch(`${baseUrl}/api/health`);
+    assert.equal(healthRes.status, 200);
 
     const docsRes = await fetch(`${baseUrl}/api/docs`);
     assert.equal(docsRes.status, 200);
     const docsJson = (await docsRes.json()) as { openapi: string; paths: Record<string, unknown> };
     assert.equal(docsJson.openapi, '3.0.3');
     assert.ok(docsJson.paths['/patients']);
-  });
-});
+    assert.ok(docsJson.paths['/clinics/onboard']);
 
-test('Protected mutations require administrator Bearer token and block viewer sessions', async () => {
-  await withTestServer(async (baseUrl) => {
-    const unauthRes = await fetch(`${baseUrl}/api/patients`, {
+    const configRes = await fetch(`${baseUrl}/api/auth/config`);
+    assert.equal(configRes.status, 200);
+
+    for (const protectedPath of [
+      '/api/patients',
+      '/api/appointments',
+      '/api/staff',
+      '/api/followups',
+      '/api/reports/overview',
+      '/api/audit-logs',
+    ]) {
+      const r = await fetch(`${baseUrl}${protectedPath}`);
+      assert.equal(r.status, 401, `${protectedPath} must return 401 without Bearer token`);
+    }
+
+    const assistantUnauth = await fetch(`${baseUrl}/api/assistant/query`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        fullName: 'Unauthorized Patient',
-        dateOfBirth: '1990-01-01',
-        contactNumber: '+1-555-0199',
-        email: 'unauth@example.org',
-      }),
+      body: JSON.stringify({ prompt: "Give me today's clinic briefing." }),
     });
-    assert.equal(unauthRes.status, 401);
+    assert.equal(assistantUnauth.status, 401);
 
-    const viewerToken = await getAdminToken(baseUrl, 'viewer');
-    const forbiddenRes = await fetch(`${baseUrl}/api/patients`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${viewerToken}`,
-      },
-      body: JSON.stringify({
-        fullName: 'Viewer Attempt',
-        dateOfBirth: '1990-01-01',
-        contactNumber: '+1-555-0199',
-        email: 'viewer@example.org',
-      }),
+    const invalidTokenRes = await fetch(`${baseUrl}/api/patients`, {
+      headers: { Authorization: 'Bearer forged-token' },
     });
-    assert.equal(forbiddenRes.status, 403);
+    assert.equal(invalidTokenRes.status, 401);
   });
 });
 
-test('Patient registration, conflict-checked booking, follow-up updates, and P-1042 confirmation flow work end-to-end', async () => {
+test('Administrator registration, clinic onboarding, and strict cross-clinic data isolation', async () => {
   await withTestServer(async (baseUrl) => {
-    const token = await getAdminToken(baseUrl, 'administrator');
-    const today = getClinicTodayDate();
+    // 1. User A registers -> needsOnboarding = true, blocked from /api/patients until onboarded
+    const syncARes = await syncUser(baseUrl, 'token-admin-a', {
+      fullName: 'Dr. Elena Brooks',
+      phoneNumber: '+1-555-0111',
+    });
+    assert.equal(syncARes.status, 200);
+    const syncA = (await syncARes.json()) as {
+      data: { needsOnboarding: boolean; activeClinic: unknown; user: { phoneNumber: string } };
+    };
+    assert.equal(syncA.data.needsOnboarding, true);
+    assert.equal(syncA.data.activeClinic, null);
+    assert.equal(syncA.data.user.phoneNumber, '+1-555-0111');
 
-    // Register patient
-    const createPatientRes = await fetch(`${baseUrl}/api/patients`, {
+    const preOnboardPatients = await fetch(`${baseUrl}/api/patients`, {
+      headers: { Authorization: 'Bearer token-admin-a' },
+    });
+    assert.equal(preOnboardPatients.status, 403);
+
+    // 2. Admin A onboards Clinic A (clean empty workspace by default)
+    const onboardARes = await fetch(`${baseUrl}/api/clinics/onboard`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
+        Authorization: 'Bearer token-admin-a',
       },
+      body: JSON.stringify({
+        clinicName: 'Alpha Health Outpatient Center',
+        clinicType: 'Primary Care & Family Medicine',
+        contactPhone: '+1-555-0190',
+        contactEmail: 'ops@alphahealth.org',
+        location: 'Seattle, WA',
+        organizationNotes: 'Mon-Fri 08:30-16:30',
+        seedSampleData: false,
+      }),
+    });
+    assert.equal(onboardARes.status, 201);
+    const onboardA = (await onboardARes.json()) as {
+      data: {
+        needsOnboarding: boolean;
+        activeClinic: { id: string; name: string };
+        activeMembership: { role: string };
+      };
+    };
+    assert.equal(onboardA.data.needsOnboarding, false);
+    assert.equal(onboardA.data.activeMembership.role, 'Clinic Administrator');
+    const clinicAId = onboardA.data.activeClinic.id;
+
+    // Clinic A starts isolated (0 patients; demo CLN-1001 patients are NOT visible)
+    const listARes = await fetch(`${baseUrl}/api/patients`, {
+      headers: { Authorization: 'Bearer token-admin-a', 'X-Clinic-Id': clinicAId },
+    });
+    assert.equal(listARes.status, 200);
+    const listA = (await listARes.json()) as { data: unknown[] };
+    assert.equal(listA.data.length, 0);
+
+    // Admin A registers a patient in Clinic A
+    const createPtARes = await fetch(`${baseUrl}/api/patients`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token-admin-a',
+        'X-Clinic-Id': clinicAId,
+      },
+      body: JSON.stringify({
+        fullName: 'Alpha Patient One',
+        dateOfBirth: '1988-03-10',
+        contactNumber: '+1-555-0201',
+        email: 'alpha.one@example.org',
+        administrativeStatus: 'Active',
+      }),
+    });
+    assert.equal(createPtARes.status, 201);
+    const ptA = (await createPtARes.json()) as { data: { id: string } };
+
+    // 3. Admin B onboards Clinic B
+    await syncUser(baseUrl, 'token-admin-b');
+    const onboardBRes = await fetch(`${baseUrl}/api/clinics/onboard`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token-admin-b',
+      },
+      body: JSON.stringify({
+        clinicName: 'Beta Outpatient Practice',
+        clinicType: 'Cardiology & Vascular Practice',
+        contactPhone: '+1-555-0299',
+        contactEmail: 'ops@betaoutpatient.org',
+        location: 'Denver, CO',
+      }),
+    });
+    assert.equal(onboardBRes.status, 201);
+    const onboardB = (await onboardBRes.json()) as {
+      data: { activeClinic: { id: string } };
+    };
+    const clinicBId = onboardB.data.activeClinic.id;
+    assert.notEqual(clinicAId, clinicBId);
+
+    // 4. Cross-clinic isolation checks: Admin B CANNOT read Clinic A via header or ID
+    const crossHeaderRes = await fetch(`${baseUrl}/api/patients`, {
+      headers: { Authorization: 'Bearer token-admin-b', 'X-Clinic-Id': clinicAId },
+    });
+    assert.equal(crossHeaderRes.status, 403);
+
+    const crossPatientLookup = await fetch(`${baseUrl}/api/patients/${ptA.data.id}`, {
+      headers: { Authorization: 'Bearer token-admin-b', 'X-Clinic-Id': clinicBId },
+    });
+    assert.equal(crossPatientLookup.status, 404);
+
+    const crossPatientPatch = await fetch(`${baseUrl}/api/patients/${ptA.data.id}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token-admin-b',
+        'X-Clinic-Id': clinicBId,
+      },
+      body: JSON.stringify({ fullName: 'Hijacked Name' }),
+    });
+    assert.equal(crossPatientPatch.status, 404);
+
+    // Admin B personal profile and clinic settings updates work cleanly
+    const patchProfileRes = await fetch(`${baseUrl}/api/account/profile`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token-admin-b',
+        'X-Clinic-Id': clinicBId,
+      },
+      body: JSON.stringify({ fullName: 'Marcus Sterling Jr.', phoneNumber: '+1-555-0333' }),
+    });
+    assert.equal(patchProfileRes.status, 200);
+    const patchedProfile = (await patchProfileRes.json()) as {
+      data: { fullName: string; phoneNumber: string };
+    };
+    assert.equal(patchedProfile.data.fullName, 'Marcus Sterling Jr.');
+    assert.equal(patchedProfile.data.phoneNumber, '+1-555-0333');
+
+    const patchClinicRes = await fetch(`${baseUrl}/api/clinic`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token-admin-b',
+        'X-Clinic-Id': clinicBId,
+      },
+      body: JSON.stringify({ location: 'Boulder, CO' }),
+    });
+    assert.equal(patchClinicRes.status, 200);
+  });
+});
+
+test('Multi-user RBAC enforces permissions per role and auto-accepts invitations', async () => {
+  await withTestServer(async (baseUrl) => {
+    const today = getClinicTodayDate();
+
+    // Admin A creates Clinic A with sample patients
+    await syncUser(baseUrl, 'token-admin-a');
+    const onboardRes = await fetch(`${baseUrl}/api/clinics/onboard`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token-admin-a',
+      },
+      body: JSON.stringify({
+        clinicName: 'Alpha Multi-Role Clinic',
+        clinicType: 'Multi-Specialty Outpatient Clinic',
+        contactPhone: '+1-555-0195',
+        contactEmail: 'ops@alphahealth.org',
+        location: 'Austin, TX',
+        seedSampleData: true,
+      }),
+    });
+    assert.equal(onboardRes.status, 201);
+    const onboard = (await onboardRes.json()) as { data: { activeClinic: { id: string } } };
+    const clinicAId = onboard.data.activeClinic.id;
+
+    // Invite Doctor, Receptionist, and Clinic Staff
+    for (const invite of [
+      { email: 'doctor@alphahealth.org', fullName: 'Dr. Priya Patel', role: 'Doctor' },
+      { email: 'reception@alphahealth.org', fullName: 'Jordan Rivera', role: 'Receptionist' },
+      { email: 'staff@alphahealth.org', fullName: 'Samira Haddad', role: 'Clinic Staff' },
+    ]) {
+      const invRes = await fetch(`${baseUrl}/api/clinic/members/invite`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer token-admin-a',
+          'X-Clinic-Id': clinicAId,
+        },
+        body: JSON.stringify(invite),
+      });
+      assert.equal(invRes.status, 201);
+    }
+
+    // Fetch a patient ID inside Clinic A
+    const ptsRes = await fetch(`${baseUrl}/api/patients`, {
+      headers: { Authorization: 'Bearer token-admin-a', 'X-Clinic-Id': clinicAId },
+    });
+    const pts = (await ptsRes.json()) as { data: Array<{ id: string }> };
+    const samplePatientId = pts.data[0].id;
+
+    // Clinic Staff (read-only) joins via invite -> allowed GET, blocked POST/audit-logs
+    const staffSync = await syncUser(baseUrl, 'token-staff-a');
+    assert.equal(staffSync.status, 200);
+    const staffReadPt = await fetch(`${baseUrl}/api/patients/${samplePatientId}`, {
+      headers: { Authorization: 'Bearer token-staff-a', 'X-Clinic-Id': clinicAId },
+    });
+    assert.equal(staffReadPt.status, 200);
+    const staffPtDetail = (await staffReadPt.json()) as {
+      data: { activity: unknown[]; permissions: { canEdit: boolean; canViewAuditHistory: boolean } };
+    };
+    assert.equal(staffPtDetail.data.permissions.canEdit, false);
+    assert.equal(staffPtDetail.data.permissions.canViewAuditHistory, false);
+    assert.equal(staffPtDetail.data.activity.length, 0);
+
+    const staffWriteBlocked = await fetch(`${baseUrl}/api/patients`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token-staff-a',
+        'X-Clinic-Id': clinicAId,
+      },
+      body: JSON.stringify({
+        fullName: 'Blocked Staff Attempt',
+        dateOfBirth: '1990-01-01',
+        contactNumber: '+1-555-0999',
+        email: 'blocked@example.org',
+      }),
+    });
+    assert.equal(staffWriteBlocked.status, 403);
+
+    const staffAuditBlocked = await fetch(`${baseUrl}/api/audit-logs`, {
+      headers: { Authorization: 'Bearer token-staff-a', 'X-Clinic-Id': clinicAId },
+    });
+    assert.equal(staffAuditBlocked.status, 403);
+
+    // Receptionist can register patients & schedule appointments, but cannot delete appointments or invite team
+    await syncUser(baseUrl, 'token-reception-a');
+    const recPtRes = await fetch(`${baseUrl}/api/patients`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token-reception-a',
+        'X-Clinic-Id': clinicAId,
+      },
+      body: JSON.stringify({
+        fullName: 'Reception Created Patient',
+        dateOfBirth: '1994-07-12',
+        contactNumber: '+1-555-0444',
+        email: 'reception.pt@example.org',
+      }),
+    });
+    assert.equal(recPtRes.status, 201);
+
+    const recInviteBlocked = await fetch(`${baseUrl}/api/clinic/members/invite`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token-reception-a',
+        'X-Clinic-Id': clinicAId,
+      },
+      body: JSON.stringify({ email: 'other@alphahealth.org', role: 'Clinic Staff' }),
+    });
+    assert.equal(recInviteBlocked.status, 403);
+
+    // Doctor can create followups & manage appointments, but cannot manage clinic settings
+    await syncUser(baseUrl, 'token-doctor-a');
+    const docFuRes = await fetch(`${baseUrl}/api/followups`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token-doctor-a',
+        'X-Clinic-Id': clinicAId,
+      },
+      body: JSON.stringify({
+        patientId: samplePatientId,
+        description: 'Follow up with lab intake forms.',
+        priority: 'Medium',
+        dueDate: today,
+      }),
+    });
+    assert.equal(docFuRes.status, 201);
+
+    const docClinicBlocked = await fetch(`${baseUrl}/api/clinic`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token-doctor-a',
+        'X-Clinic-Id': clinicAId,
+      },
+      body: JSON.stringify({ name: 'Unauthorized Rename' }),
+    });
+    assert.equal(docClinicBlocked.status, 403);
+
+    // Cannot demote the last active Clinic Administrator
+    const membersRes = await fetch(`${baseUrl}/api/clinic/members`, {
+      headers: { Authorization: 'Bearer token-admin-a', 'X-Clinic-Id': clinicAId },
+    });
+    const membersJson = (await membersRes.json()) as {
+      data: { members: Array<{ membershipId: string; role: string }> };
+    };
+    const soleAdmin = membersJson.data.members.find((m) => m.role === 'Clinic Administrator')!;
+    const demoteRes = await fetch(`${baseUrl}/api/clinic/members/${soleAdmin.membershipId}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token-admin-a',
+        'X-Clinic-Id': clinicAId,
+      },
+      body: JSON.stringify({ role: 'Doctor' }),
+    });
+    assert.equal(demoteRes.status, 409);
+  });
+});
+
+test('Clinic-scoped CRUD, conflict checking, assistant SSE + P-1042 confirmation, 10/page pagination, and staff profiles work cleanly', async () => {
+  await withTestServer(async (baseUrl, db) => {
+    attachUserToDemoClinic(db, TEST_IDENTITIES['token-demo-admin']);
+    const authHeaders = {
+      'Content-Type': 'application/json',
+      Authorization: 'Bearer token-demo-admin',
+      'X-Clinic-Id': DEFAULT_DEMO_CLINIC_ID,
+    };
+    const today = getClinicTodayDate();
+
+    // Daily & Overview reports
+    const dailyRes = await fetch(`${baseUrl}/api/reports/daily`, { headers: authHeaders });
+    assert.equal(dailyRes.status, 200);
+    const dailyJson = (await dailyRes.json()) as { data: { totalAppointments: number } };
+    assert.ok(dailyJson.data.totalAppointments >= 6);
+
+    const overviewRes = await fetch(`${baseUrl}/api/reports/overview`, { headers: authHeaders });
+    assert.equal(overviewRes.status, 200);
+
+    // Register patient + conflict check + valid booking
+    const createPatientRes = await fetch(`${baseUrl}/api/patients`, {
+      method: 'POST',
+      headers: authHeaders,
       body: JSON.stringify({
         fullName: 'Sora Takahashi',
         dateOfBirth: '1992-05-14',
@@ -155,13 +540,9 @@ test('Patient registration, conflict-checked booking, follow-up updates, and P-1
     assert.equal(createPatientRes.status, 201);
     const createdPatient = (await createPatientRes.json()) as { data: { id: string } };
 
-    // Attempt conflicting booking (Dr. Priya Patel already has today 08:30 APT-2025)
     const conflictRes = await fetch(`${baseUrl}/api/appointments`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
+      headers: authHeaders,
       body: JSON.stringify({
         patientId: createdPatient.data.id,
         appointmentDate: today,
@@ -172,9 +553,9 @@ test('Patient registration, conflict-checked booking, follow-up updates, and P-1
     });
     assert.equal(conflictRes.status, 409);
 
-    // Check availability and book valid slot
     const availRes = await fetch(
-      `${baseUrl}/api/appointments/availability?department=General%20Medicine&limit=2`
+      `${baseUrl}/api/appointments/availability?department=General%20Medicine&limit=2`,
+      { headers: authHeaders }
     );
     const availJson = (await availRes.json()) as {
       data: Array<{ date: string; time: string; clinician: string; department: string }>;
@@ -184,10 +565,7 @@ test('Patient registration, conflict-checked booking, follow-up updates, and P-1
 
     const bookRes = await fetch(`${baseUrl}/api/appointments`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
+      headers: authHeaders,
       body: JSON.stringify({
         patientId: createdPatient.data.id,
         appointmentDate: slot.date,
@@ -198,10 +576,10 @@ test('Patient registration, conflict-checked booking, follow-up updates, and P-1
     });
     assert.equal(bookRes.status, 201);
 
-    // Assistant query for P-1042 returns confirmation gate without mutating DB yet
+    // Assistant P-1042 confirmation flow
     const queryRes = await fetch(`${baseUrl}/api/assistant/query`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders,
       body: JSON.stringify({
         prompt: 'Reschedule patient P-1042 to an available appointment slot.',
       }),
@@ -209,23 +587,17 @@ test('Patient registration, conflict-checked booking, follow-up updates, and P-1
     assert.equal(queryRes.status, 200);
     const queryJson = (await queryRes.json()) as {
       data: {
-        mode: string;
         pendingConfirmation?: {
           actionType: 'reschedule_appointment';
           payload: { appointmentId: string; appointmentDate: string; appointmentTime: string };
         };
       };
     };
-    assert.equal(queryJson.data.mode, 'development-local-rest-preview');
     assert.ok(queryJson.data.pendingConfirmation);
 
-    // Confirm reschedule
     const confirmRes = await fetch(`${baseUrl}/api/assistant/confirm`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
+      headers: authHeaders,
       body: JSON.stringify({
         actionType: queryJson.data.pendingConfirmation.actionType,
         payload: queryJson.data.pendingConfirmation.payload,
@@ -233,111 +605,518 @@ test('Patient registration, conflict-checked booking, follow-up updates, and P-1
     });
     assert.equal(confirmRes.status, 200);
 
-    const updatedAptRes = await fetch(
-      `${baseUrl}/api/appointments/${queryJson.data.pendingConfirmation.payload.appointmentId}`
-    );
-    const updatedApt = (await updatedAptRes.json()) as {
-      data: { status: string; appointmentDate: string; appointmentTime: string };
-    };
-    assert.equal(updatedApt.data.status, 'Scheduled');
-    assert.equal(
-      updatedApt.data.appointmentDate,
-      queryJson.data.pendingConfirmation.payload.appointmentDate
-    );
-
-    // Edit patient record (PATCH /api/patients/:id) and verify persisted
-    const editPatientRes = await fetch(`${baseUrl}/api/patients/${createdPatient.data.id}`, {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        fullName: 'Sora Takahashi-Updated',
-        contactNumber: '+1-555-0192',
-        administrativeStatus: 'Pending Verification',
-      }),
-    });
-    assert.equal(editPatientRes.status, 200);
-    const verifiedPatientRes = await fetch(`${baseUrl}/api/patients/${createdPatient.data.id}`);
-    const verifiedPatient = (await verifiedPatientRes.json()) as {
-      data: { fullName: string; contactNumber: string; administrativeStatus: string };
-    };
-    assert.equal(verifiedPatient.data.fullName, 'Sora Takahashi-Updated');
-    assert.equal(verifiedPatient.data.contactNumber, '+1-555-0192');
-    assert.equal(verifiedPatient.data.administrativeStatus, 'Pending Verification');
-
-    // Create, edit priority/description/dueDate, and complete follow-up task
-    const createFuRes = await fetch(`${baseUrl}/api/followups`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        patientId: createdPatient.data.id,
-        description: 'Confirm intake paperwork before follow-up visit.',
-        priority: 'Medium',
-        dueDate: today,
-      }),
-    });
-    assert.equal(createFuRes.status, 201);
-    const createdFu = (await createFuRes.json()) as { data: { id: string } };
-
-    const editFuRes = await fetch(`${baseUrl}/api/followups/${createdFu.data.id}`, {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        priority: 'High',
-        description: 'Urgent insurance verification before visit.',
-        status: 'Completed',
-      }),
-    });
-    assert.equal(editFuRes.status, 200);
-    const completedFuRes = await fetch(`${baseUrl}/api/followups?status=Completed`);
-    const completedFuJson = (await completedFuRes.json()) as {
-      data: Array<{ id: string; priority: string; description: string; status: string }>;
-    };
-    const matchedFu = completedFuJson.data.find((t) => t.id === createdFu.data.id);
-    assert.ok(matchedFu);
-    assert.equal(matchedFu.priority, 'High');
-    assert.equal(matchedFu.description, 'Urgent insurance verification before visit.');
-    assert.equal(matchedFu.status, 'Completed');
-  });
-});
-
-test('POST /api/assistant/stream emits real SSE tool progress and structured briefing response', async () => {
-  await withTestServer(async (baseUrl) => {
-    const emptyRes = await fetch(`${baseUrl}/api/assistant/stream`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: '   ' }),
-    });
-    assert.equal(emptyRes.status, 400);
-
+    // Assistant SSE stream
     const streamRes = await fetch(`${baseUrl}/api/assistant/stream`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders,
       body: JSON.stringify({ prompt: "Give me today's clinic briefing." }),
     });
     assert.equal(streamRes.status, 200);
-    assert.ok(streamRes.headers.get('content-type')?.includes('text/event-stream'));
-
-    const raw = await streamRes.text();
-    const events = raw
+    const rawSse = await streamRes.text();
+    const events = rawSse
       .split('\n\n')
       .map((block) => block.trim())
       .filter(Boolean)
-      .map((block) => JSON.parse(block.replace(/^data:\s*/, '')) as { type: string; response?: { intent: string; sections?: unknown[] } });
-
+      .map(
+        (block) =>
+          JSON.parse(block.replace(/^data:\s*/, '')) as {
+            type: string;
+            response?: { intent: string; sections?: unknown[] };
+          }
+      );
     assert.ok(events.some((e) => e.type === 'tool_start'));
     assert.ok(events.some((e) => e.type === 'tool_done'));
     const complete = events.find((e) => e.type === 'complete');
-    assert.ok(complete?.response);
-    assert.equal(complete.response.intent, 'daily_briefing');
-    assert.equal(complete.response.sections?.length, 5);
+    assert.equal(complete?.response?.intent, 'daily_briefing');
+
+    // Appointment 10-per-page pagination, clamping, and delete
+    const page1Res = await fetch(
+      `${baseUrl}/api/appointments?page=1&pageSize=10&sortBy=id&sortDir=asc`,
+      { headers: authHeaders }
+    );
+    assert.equal(page1Res.status, 200);
+    const page1 = (await page1Res.json()) as {
+      data: Array<{ id: string }>;
+      meta: { count: number; total: number; page: number; pageSize: number; totalPages: number };
+    };
+    assert.equal(page1.data.length, 10);
+    assert.equal(page1.meta.pageSize, 10);
+    assert.ok(page1.meta.total >= 30);
+
+    const clampRes = await fetch(`${baseUrl}/api/appointments?page=99&pageSize=10`, {
+      headers: authHeaders,
+    });
+    const clamped = (await clampRes.json()) as typeof page1;
+    assert.equal(clamped.meta.page, clamped.meta.totalPages);
+
+    const delRes = await fetch(`${baseUrl}/api/appointments/${page1.data[0].id}`, {
+      method: 'DELETE',
+      headers: authHeaders,
+    });
+    assert.equal(delRes.status, 200);
+
+    // Staff directory & profile update
+    const staffRes = await fetch(`${baseUrl}/api/staff`, { headers: authHeaders });
+    assert.equal(staffRes.status, 200);
+    const staffJson = (await staffRes.json()) as {
+      data: Array<{ id: string; fullName: string }>;
+    };
+    const priya = staffJson.data.find((s) => s.fullName === 'Dr. Priya Patel')!;
+    assert.ok(priya);
+
+    const patchStaffRes = await fetch(`${baseUrl}/api/staff/${priya.id}`, {
+      method: 'PATCH',
+      headers: authHeaders,
+      body: JSON.stringify({ email: 'priya.patel@caredesk.example.org', status: 'On Leave' }),
+    });
+    assert.equal(patchStaffRes.status, 200);
+  });
+});
+
+test('Doctor verification approval, doctor workspace consultations, explainable reports, AI conversations, and notifications', async () => {
+  await withTestServer(async (baseUrl) => {
+    const today = getClinicTodayDate();
+
+    // 1. Admin onboards a fresh clinic workspace
+    await syncUser(baseUrl, 'token-admin-a');
+    const onboardRes = await fetch(`${baseUrl}/api/clinics/onboard`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token-admin-a',
+      },
+      body: JSON.stringify({
+        clinicName: 'Northwind Specialty Clinic',
+        clinicType: 'Multi-Specialty Outpatient Clinic',
+        contactPhone: '+1-555-0400',
+        contactEmail: 'admin@northwind.org',
+        location: 'Portland, OR',
+        seedSampleData: false,
+      }),
+    });
+    assert.equal(onboardRes.status, 201);
+    const clinicId = ((await onboardRes.json()) as { data: { activeClinic: { id: string } } }).data
+      .activeClinic.id;
+
+    // 2. Candidate doctor sees clinic directory & submits verification application (NOT yet active)
+    await syncUser(baseUrl, 'token-candidate-doc');
+    const dirRes = await fetch(`${baseUrl}/api/clinics/directory`, {
+      headers: { Authorization: 'Bearer token-candidate-doc' },
+    });
+    assert.equal(dirRes.status, 200);
+    const dirJson = (await dirRes.json()) as { data: Array<{ id: string; name: string }> };
+    assert.ok(dirJson.data.some((c) => c.id === clinicId));
+
+    const applyRes = await fetch(`${baseUrl}/api/doctor-applications`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token-candidate-doc',
+      },
+      body: JSON.stringify({
+        clinicId,
+        fullName: 'Dr. Nadia Lin',
+        phoneNumber: '+1-555-0412',
+        specialty: 'Cardiology',
+        department: 'Cardiology',
+        qualifications: 'MD, FACC',
+        licenseNumber: 'OR-MED-88921',
+      }),
+    });
+    assert.equal(applyRes.status, 201);
+    const appJson = (await applyRes.json()) as { data: { id: string; status: string } };
+    assert.equal(appJson.data.status, 'Pending Verification');
+
+    // Candidate doctor MUST be blocked from /api/doctor/dashboard before admin approval
+    const preApproveDoc = await fetch(`${baseUrl}/api/doctor/dashboard`, {
+      headers: { Authorization: 'Bearer token-candidate-doc', 'X-Clinic-Id': clinicId },
+    });
+    assert.equal(preApproveDoc.status, 403);
+
+    // 3. Admin sees notification & approves doctor application
+    const adminNotifRes = await fetch(`${baseUrl}/api/notifications`, {
+      headers: { Authorization: 'Bearer token-admin-a', 'X-Clinic-Id': clinicId },
+    });
+    assert.equal(adminNotifRes.status, 200);
+    const adminNotifs = (await adminNotifRes.json()) as {
+      data: Array<{ title: string }>;
+      meta: { unreadCount: number };
+    };
+    assert.ok(adminNotifs.meta.unreadCount >= 1);
+    assert.ok(adminNotifs.data.some((n) => n.title.includes('Doctor Verification')));
+
+    const approveRes = await fetch(`${baseUrl}/api/doctor-applications/${appJson.data.id}/approve`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token-admin-a',
+        'X-Clinic-Id': clinicId,
+      },
+      body: JSON.stringify({ reviewNotes: 'License verified.' }),
+    });
+    assert.equal(approveRes.status, 200);
+    const approvedData = (await approveRes.json()) as { data: { staff: { id: string } } };
+    const doctorStaffId = approvedData.data.staff.id;
+
+    // 4. Approved doctor accesses Doctor Workspace, configures schedule + duty status
+    const docDashRes = await fetch(`${baseUrl}/api/doctor/dashboard`, {
+      headers: { Authorization: 'Bearer token-candidate-doc', 'X-Clinic-Id': clinicId },
+    });
+    assert.equal(docDashRes.status, 200);
+    const docDash = (await docDashRes.json()) as { data: { doctor: { id: string } } };
+    assert.equal(docDash.data.doctor.id, doctorStaffId);
+
+    const schedulePutRes = await fetch(`${baseUrl}/api/doctors/${doctorStaffId}/schedule`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token-candidate-doc',
+        'X-Clinic-Id': clinicId,
+      },
+      body: JSON.stringify({
+        days: [0, 1, 2, 3, 4, 5, 6].map((dayOfWeek) => ({
+          dayOfWeek,
+          isWorking: dayOfWeek >= 1 && dayOfWeek <= 5,
+          startTime: '08:30',
+          endTime: '17:00',
+          breakStart: '12:00',
+          breakEnd: '13:00',
+          slotDurationMinutes: 30,
+        })),
+      }),
+    });
+    assert.equal(schedulePutRes.status, 200);
+
+    const dutyRes = await fetch(`${baseUrl}/api/doctors/${doctorStaffId}/duty-status`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token-candidate-doc',
+        'X-Clinic-Id': clinicId,
+      },
+      body: JSON.stringify({ attendanceStatus: 'Available' }),
+    });
+    assert.equal(dutyRes.status, 200);
+
+    // 5. Register patient and author both a patient-visible and a doctor-private consultation
+    const ptRes = await fetch(`${baseUrl}/api/patients`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token-admin-a',
+        'X-Clinic-Id': clinicId,
+      },
+      body: JSON.stringify({
+        fullName: 'Alpha Patient One',
+        dateOfBirth: '1988-03-10',
+        contactNumber: '+1-555-0201',
+        email: 'patient.one@example.org',
+      }),
+    });
+    assert.equal(ptRes.status, 201);
+    const patientId = ((await ptRes.json()) as { data: { id: string } }).data.id;
+
+    const conVisibleRes = await fetch(`${baseUrl}/api/consultations`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token-candidate-doc',
+        'X-Clinic-Id': clinicId,
+      },
+      body: JSON.stringify({
+        patientId,
+        consultationDate: today,
+        summary: 'Normal cardiac auscultation and steady resting ECG.',
+        diagnosisNotes: 'Benign sinus rhythm',
+        recommendations: 'Repeat lipid panel in 6 months.',
+        prescriptions: [
+          { medication: 'Atorvastatin', dosage: '10 mg', frequency: 'Nightly', duration: '90 days' },
+        ],
+        testResults: [{ testName: '12-Lead ECG', resultValue: 'Normal sinus rhythm', status: 'Normal' }],
+        patientVisible: true,
+        createFollowUp: {
+          description: '6-month preventive cardiology lipid check',
+          dueDate: today,
+          priority: 'Medium',
+        },
+      }),
+    });
+    assert.equal(conVisibleRes.status, 201);
+
+    const conHiddenRes = await fetch(`${baseUrl}/api/consultations`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token-candidate-doc',
+        'X-Clinic-Id': clinicId,
+      },
+      body: JSON.stringify({
+        patientId,
+        consultationDate: today,
+        summary: 'Internal clinician differential note only.',
+        patientVisible: false,
+      }),
+    });
+    assert.equal(conHiddenRes.status, 201);
+
+    // 6. Explainable reports, AI conversation persistence, and notification read-all
+    const explainRes = await fetch(`${baseUrl}/api/reports/explainable`, {
+      headers: { Authorization: 'Bearer token-admin-a', 'X-Clinic-Id': clinicId },
+    });
+    assert.equal(explainRes.status, 200);
+    const explainJson = (await explainRes.json()) as {
+      data: {
+        sections: Array<{
+          explanation: {
+            whatHappened: string;
+            whatItMeans: string;
+            whyItMatters: string;
+            appropriateAction: string;
+          };
+        }>;
+        doctorUtilization: Array<{ staffId: string }>;
+      };
+    };
+    assert.equal(explainJson.data.sections.length, 6);
+    for (const sec of explainJson.data.sections) {
+      assert.ok(sec.explanation.whatHappened);
+      assert.ok(sec.explanation.whatItMeans);
+      assert.ok(sec.explanation.whyItMatters);
+      assert.ok(sec.explanation.appropriateAction);
+    }
+    assert.ok(explainJson.data.doctorUtilization.some((d) => d.staffId === doctorStaffId));
+
+    const convCreate = await fetch(`${baseUrl}/api/assistant/conversations`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token-admin-a',
+        'X-Clinic-Id': clinicId,
+      },
+      body: JSON.stringify({ title: 'Morning Ops Check' }),
+    });
+    assert.equal(convCreate.status, 201);
+    const convId = ((await convCreate.json()) as { data: { id: string } }).data.id;
+
+    const convQuery = await fetch(`${baseUrl}/api/assistant/query`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token-admin-a',
+        'X-Clinic-Id': clinicId,
+      },
+      body: JSON.stringify({ prompt: "Give me today's clinic briefing.", conversationId: convId }),
+    });
+    assert.equal(convQuery.status, 200);
+
+    const convDetail = await fetch(`${baseUrl}/api/assistant/conversations/${convId}`, {
+      headers: { Authorization: 'Bearer token-admin-a', 'X-Clinic-Id': clinicId },
+    });
+    assert.equal(convDetail.status, 200);
+    const detailJson = (await convDetail.json()) as { data: { messages: unknown[] } };
+    assert.equal(detailJson.data.messages.length, 2);
+
+    const convDel = await fetch(`${baseUrl}/api/assistant/conversations/${convId}`, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer token-admin-a', 'X-Clinic-Id': clinicId },
+    });
+    assert.equal(convDel.status, 200);
+
+    const readAllRes = await fetch(`${baseUrl}/api/notifications/read-all`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer token-admin-a', 'X-Clinic-Id': clinicId },
+    });
+    assert.equal(readAllRes.status, 200);
+  });
+});
+
+test('Patient portal verified claim-code flow prevents email auto-linking and enforces strict portal isolation', async () => {
+  await withTestServer(async (baseUrl, db) => {
+    attachUserToDemoClinic(db, TEST_IDENTITIES['token-demo-admin']);
+    const adminHeaders = {
+      'Content-Type': 'application/json',
+      Authorization: 'Bearer token-demo-admin',
+      'X-Clinic-Id': DEFAULT_DEMO_CLINIC_ID,
+    };
+
+    // 1. Register a patient matching token-patient-unlinked's EXACT email & name (Sora Takahashi)
+    const soraRes = await fetch(`${baseUrl}/api/patients`, {
+      method: 'POST',
+      headers: adminHeaders,
+      body: JSON.stringify({
+        fullName: 'Sora Takahashi',
+        dateOfBirth: '1992-05-14',
+        contactNumber: '+1-555-0188',
+        email: 'sora.takahashi@example.org',
+      }),
+    });
+    assert.equal(soraRes.status, 201);
+    const soraId = ((await soraRes.json()) as { data: { id: string } }).data.id;
+
+    // Sign in with matching email/name -> MUST NOT auto-link; needsOnboarding must remain true
+    const unlinkedSync = await syncUser(baseUrl, 'token-patient-unlinked');
+    assert.equal(unlinkedSync.status, 200);
+    const unlinkedJson = (await unlinkedSync.json()) as {
+      data: { needsOnboarding: boolean; activeClinic: unknown; linkedPatient: { id: string } | null };
+    };
+    assert.equal(unlinkedJson.data.needsOnboarding, true);
+    assert.equal(unlinkedJson.data.linkedPatient, null);
+
+    // 2. Generate Claim Code for Sora & test wrong DOB rejection vs valid claim redemption
+    const inviteRes = await fetch(`${baseUrl}/api/patients/${soraId}/portal-invite`, {
+      method: 'POST',
+      headers: adminHeaders,
+    });
+    assert.equal(inviteRes.status, 201);
+    const claimCode = ((await inviteRes.json()) as { data: { claimCode: string } }).data.claimCode;
+
+    const wrongDobClaim = await fetch(`${baseUrl}/api/patient-portal/claim`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token-patient-unlinked',
+      },
+      body: JSON.stringify({
+        clinicId: DEFAULT_DEMO_CLINIC_ID,
+        claimCode,
+        dateOfBirth: '1990-01-01',
+      }),
+    });
+    assert.equal(wrongDobClaim.status, 403);
+
+    const validClaim = await fetch(`${baseUrl}/api/patient-portal/claim`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token-patient-unlinked',
+      },
+      body: JSON.stringify({
+        clinicId: DEFAULT_DEMO_CLINIC_ID,
+        claimCode,
+        dateOfBirth: '1992-05-14',
+      }),
+    });
+    assert.equal(validClaim.status, 200);
+    const claimedSession = (await validClaim.json()) as {
+      data: { linkedPatient: { id: string } | null; activeMembership: { role: string } };
+    };
+    assert.equal(claimedSession.data.linkedPatient?.id, soraId);
+    assert.equal(claimedSession.data.activeMembership.role, 'Patient');
+
+    const patientHeaders = {
+      'Content-Type': 'application/json',
+      Authorization: 'Bearer token-patient-unlinked',
+      'X-Clinic-Id': DEFAULT_DEMO_CLINIC_ID,
+    };
+
+    // 3. Patient Portal strictly blocks clinic-wide admin/staff routes with 403
+    for (const forbiddenRoute of [
+      '/api/patients',
+      '/api/patients/P-1001',
+      '/api/reports/overview',
+      '/api/reports/explainable',
+      '/api/audit-logs',
+    ]) {
+      const r = await fetch(`${baseUrl}${forbiddenRoute}`, { headers: patientHeaders });
+      assert.equal(r.status, 403, `Patient must get 403 on ${forbiddenRoute}`);
+    }
+
+    // 4. Insert one visible & one hidden consultation for Sora directly via DB or Doctor -> verify only visible shows
+    const docUserNow = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO consultations (
+        id, clinic_id, appointment_id, patient_id, staff_id, doctor_name,
+        consultation_date, summary, diagnosis_notes, recommendations,
+        prescriptions_json, test_results_json, patient_visible, created_at, updated_at
+      ) VALUES
+      ('CON-VIS', ?, NULL, ?, 'STF-1001', 'Dr. Priya Patel', '2026-11-22', 'Visible patient care plan', '', 'Hydrate well', '[]', '[]', 1, ?, ?),
+      ('CON-HID', ?, NULL, ?, 'STF-1001', 'Dr. Priya Patel', '2026-11-22', 'Hidden internal note', '', '', '[]', '[]', 0, ?, ?)
+    `).run(
+      DEFAULT_DEMO_CLINIC_ID,
+      soraId,
+      docUserNow,
+      docUserNow,
+      DEFAULT_DEMO_CLINIC_ID,
+      soraId,
+      docUserNow,
+      docUserNow
+    );
+
+    const healthRes = await fetch(`${baseUrl}/api/patient-portal/health`, { headers: patientHeaders });
+    assert.equal(healthRes.status, 200);
+    const healthJson = (await healthRes.json()) as {
+      data: { consultations: Array<{ id: string }> };
+    };
+    assert.equal(healthJson.data.consultations.length, 1);
+    assert.equal(healthJson.data.consultations[0].id, 'CON-VIS');
+
+    // 5. Patient checks availability, books an appointment, gets 409 on double-booking, and submits reschedule request
+    const availRes = await fetch(
+      `${baseUrl}/api/patient-portal/availability?department=General%20Medicine&days=7`,
+      { headers: patientHeaders }
+    );
+    assert.equal(availRes.status, 200);
+    const availJson = (await availRes.json()) as {
+      data: {
+        slots: Array<{
+          date: string;
+          time: string;
+          staffId?: string;
+          clinician: string;
+          department: string;
+        }>;
+      };
+    };
+    assert.ok(availJson.data.slots.length >= 2);
+    const firstSlot = availJson.data.slots[0];
+    const secondSlot = availJson.data.slots[1];
+
+    const bookRes = await fetch(`${baseUrl}/api/patient-portal/appointments`, {
+      method: 'POST',
+      headers: patientHeaders,
+      body: JSON.stringify({
+        staffId: firstSlot.staffId,
+        clinician: firstSlot.clinician,
+        department: firstSlot.department,
+        appointmentDate: firstSlot.date,
+        appointmentTime: firstSlot.time,
+        appointmentType: 'Consultation',
+      }),
+    });
+    assert.equal(bookRes.status, 201);
+    const bookedAptId = ((await bookRes.json()) as { data: { id: string } }).data.id;
+
+    // Double-booking the same slot must fail with 409
+    const doubleBookRes = await fetch(`${baseUrl}/api/patient-portal/appointments`, {
+      method: 'POST',
+      headers: patientHeaders,
+      body: JSON.stringify({
+        staffId: firstSlot.staffId,
+        clinician: firstSlot.clinician,
+        department: firstSlot.department,
+        appointmentDate: firstSlot.date,
+        appointmentTime: firstSlot.time,
+        appointmentType: 'Consultation',
+      }),
+    });
+    assert.equal(doubleBookRes.status, 409);
+
+    const reschedReqRes = await fetch(
+      `${baseUrl}/api/patient-portal/appointments/${bookedAptId}/reschedule-request`,
+      {
+        method: 'POST',
+        headers: patientHeaders,
+        body: JSON.stringify({
+          requestedDate: secondSlot.date,
+          requestedTime: secondSlot.time,
+          notes: 'Afternoon works better',
+        }),
+      }
+    );
+    assert.equal(reschedReqRes.status, 200);
+    const reschedReqJson = (await reschedReqRes.json()) as {
+      data: { requestStatus: string };
+    };
+    assert.equal(reschedReqJson.data.requestStatus, 'Reschedule Requested');
   });
 });

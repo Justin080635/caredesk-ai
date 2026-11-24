@@ -1,0 +1,30 @@
+{
+  "entities": {
+    "ClinicWorkspace": {
+      "title": "ClinicWorkspace",
+      "description": "Authenticated multi-tenant clinic boundary stored relationally in SQLite and authorized via Firebase Authentication ID tokens.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique clinic identifier",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "maxLength": 64
+        },
+        "name": {
+          "type": "string",
+          "description": "Clinic name",
+          "minLength": 2,
+          "maxLength": 120
+        },
+        "clinicType": {
+          "type": "string",
+          "description": "Specialty or practice category",
+          "maxLength": 80
+        }
+      },
+      "required": ["id", "name", "clinicType"]
+    }
+  },
+  "firestore": {}
+}

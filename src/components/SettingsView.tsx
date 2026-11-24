@@ -1,11 +1,17 @@
-import { CheckCircle2, Info, ShieldCheck, Sliders, UserCheck } from 'lucide-react';
-import type { UserRole } from '../shared/types';
+import {
+  ArrowUpRight,
+  Building2,
+  CheckCircle2,
+  Info,
+  ShieldCheck,
+  Sliders,
+  UserCheck,
+} from 'lucide-react';
+import type { AccountSessionState } from '../shared/types';
 
 interface SettingsViewProps {
-  sessionRole: UserRole;
-  sessionActor: string;
-  passcodeRequired: boolean;
-  onRoleSwitch: (role: UserRole) => void;
+  session: AccountSessionState;
+  onOpenProfile: () => void;
   compactDensity: boolean;
   onToggleCompactDensity: (compact: boolean) => void;
   sidebarCollapsed: boolean;
@@ -14,44 +20,44 @@ interface SettingsViewProps {
 }
 
 export function SettingsView({
-  sessionRole,
-  sessionActor,
-  passcodeRequired,
-  onRoleSwitch,
+  session,
+  onOpenProfile,
   compactDensity,
   onToggleCompactDensity,
   sidebarCollapsed,
   onToggleSidebarCollapsed,
   onSuccessNotice,
 }: SettingsViewProps) {
+  const { user, activeClinic, activeMembership } = session;
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-      {/* Left Column: Clinic & Workspace Identity */}
+      {/* Left Column: Clinic & Workspace Preferences */}
       <div className="lg:col-span-6 space-y-6">
         <section className="card-surface rounded-xl p-6 space-y-5">
           <div className="flex items-center gap-2.5 border-b border-[#E3E8E4] pb-4">
             <Sliders className="w-5 h-5 text-[#047857]" aria-hidden="true" />
             <div>
               <h2 className="text-base font-semibold text-[#111C17]">
-                Clinic Administration Settings
+                Workspace &amp; Display Settings
               </h2>
               <p className="text-xs text-[#526259]">
-                Facility profile, scheduling parameters, and workspace density
+                Facility workspace identity, scheduling rules, and table density preferences
               </p>
             </div>
           </div>
 
           <dl className="divide-y divide-[#EEF2EF] text-sm">
             <div className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-1">
-              <dt className="text-xs text-[#526259]">Facility Profile</dt>
+              <dt className="text-xs text-[#526259]">Active Clinic Workspace</dt>
               <dd className="font-medium text-[#111C17] text-right">
-                CareDesk Outpatient Operations Center
+                {activeClinic?.name ?? 'Clinic Workspace'}
               </dd>
             </div>
             <div className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-1">
-              <dt className="text-xs text-[#526259]">Data Environment</dt>
-              <dd className="font-mono text-xs font-medium text-[#047857]">
-                Synthetic Demo Records Only
+              <dt className="text-xs text-[#526259]">Clinic Type &amp; ID</dt>
+              <dd className="font-mono text-xs font-medium text-[#047857] text-right">
+                {activeClinic?.clinicType ?? 'Outpatient Clinic'} · {activeClinic?.id ?? '—'}
               </dd>
             </div>
             <div className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-1">
@@ -126,56 +132,49 @@ export function SettingsView({
         </section>
 
         <section className="card-surface rounded-xl p-6 space-y-4">
-          <div className="flex items-center gap-2.5 border-b border-[#E3E8E4] pb-4">
-            <UserCheck className="w-5 h-5 text-[#047857]" aria-hidden="true" />
-            <div>
-              <h2 className="text-base font-semibold text-[#111C17]">
-                Active Staff Session &amp; Permissions
-              </h2>
-              <p className="text-xs text-[#526259]">
-                Server-enforced HMAC Bearer token protecting administrative mutations
-              </p>
-            </div>
-          </div>
-
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div>
-              <div className="text-sm font-semibold text-[#111C17]">{sessionActor}</div>
-              <div className="text-xs text-[#526259] mt-0.5">
-                Active role:{' '}
-                <span className="font-mono font-medium text-[#047857]">
-                  {sessionRole === 'administrator' ? 'Administrator (Read + Write)' : 'Viewer (Read-Only)'}
-                </span>
-                <span aria-hidden="true"> · </span>
-                <span>
-                  {passcodeRequired ? 'Passcode required for Admin' : 'Demo preview access'}
-                </span>
+          <div className="flex items-center justify-between gap-3 border-b border-[#E3E8E4] pb-4">
+            <div className="flex items-center gap-2.5">
+              <UserCheck className="w-5 h-5 text-[#047857]" aria-hidden="true" />
+              <div>
+                <h2 className="text-base font-semibold text-[#111C17]">
+                  Authenticated Account &amp; RBAC
+                </h2>
+                <p className="text-xs text-[#526259]">
+                  Server-verified Firebase JWT &amp; clinic isolation boundary
+                </p>
               </div>
             </div>
+            <button
+              type="button"
+              onClick={onOpenProfile}
+              className="btn-press inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-[#0B261C] bg-[#ECF4EF] hover:bg-[#DCECE2] border border-[#C6DFD1] rounded-lg transition-colors shrink-0"
+            >
+              Manage Profile
+              <ArrowUpRight className="w-3.5 h-3.5" aria-hidden="true" />
+            </button>
+          </div>
 
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={() => onRoleSwitch('administrator')}
-                className={`px-3.5 py-2 text-xs font-medium rounded-lg border transition-colors ${
-                  sessionRole === 'administrator'
-                    ? 'bg-[#0B261C] text-white border-[#0B261C]'
-                    : 'bg-white text-[#111C17] border-[#E3E8E4] hover:bg-[#F6F8F6]'
-                }`}
-              >
-                Use Administrator
-              </button>
-              <button
-                type="button"
-                onClick={() => onRoleSwitch('viewer')}
-                className={`px-3.5 py-2 text-xs font-medium rounded-lg border transition-colors ${
-                  sessionRole === 'viewer'
-                    ? 'bg-[#0B261C] text-white border-[#0B261C]'
-                    : 'bg-white text-[#111C17] border-[#E3E8E4] hover:bg-[#F6F8F6]'
-                }`}
-              >
-                Use Read-Only Viewer
-              </button>
+          <div className="space-y-2 text-xs">
+            <div className="flex items-center justify-between py-1">
+              <span className="text-[#526259]">Signed-in User</span>
+              <span className="font-semibold text-[#111C17]">{user.fullName}</span>
+            </div>
+            <div className="flex items-center justify-between py-1">
+              <span className="text-[#526259]">Account Email</span>
+              <span className="font-mono text-[#111C17]">{user.email}</span>
+            </div>
+            <div className="flex items-center justify-between py-1">
+              <span className="text-[#526259]">Authorized Role</span>
+              <span className="font-mono font-semibold text-[#047857]">
+                {activeMembership?.role ?? 'Clinic Administrator'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between py-1">
+              <span className="text-[#526259]">Clinic Boundary</span>
+              <span className="inline-flex items-center gap-1 font-mono text-[#047857]">
+                <Building2 className="w-3.5 h-3.5" aria-hidden="true" />
+                {activeClinic?.id ?? '—'}
+              </span>
             </div>
           </div>
         </section>
@@ -191,7 +190,7 @@ export function SettingsView({
                 Synapse CLI &amp; MCP Integration Status
               </h2>
               <p className="text-xs text-[#526259]">
-                Honest architectural readiness overview for CareDesk AI&apos;s backend
+                Architectural readiness overview for CareDesk AI&apos;s multi-tenant backend
               </p>
             </div>
           </div>
@@ -199,13 +198,16 @@ export function SettingsView({
           <div className="p-4 bg-[#ECF4EF] rounded-lg space-y-2 text-xs text-[#111C17]">
             <div className="flex items-center gap-2 font-semibold text-[#0B261C]">
               <ShieldCheck className="w-4 h-4 text-[#047857]" aria-hidden="true" />
-              Status: Development Preview (Synapse MCP Server Not Yet Connected)
+              Status: Clinic-Isolated REST Preview Active
             </div>
             <p className="text-[#34433B] leading-relaxed">
-              CareDesk&apos;s core REST API endpoints (<code className="font-mono">/api/patients</code>,{' '}
+              CareDesk&apos;s REST API endpoints (<code className="font-mono">/api/patients</code>,{' '}
               <code className="font-mono">/api/appointments</code>,{' '}
               <code className="font-mono">/api/followups</code>,{' '}
-              <code className="font-mono">/api/reports</code>) and OpenAPI schema (<code className="font-mono">/api/docs</code>) are live and backed by SQLite. CareDesk Assistant currently runs through a decoupled Local REST Adapter until Synapse CLI scans the backend and connects an MCP server.
+              <code className="font-mono">/api/reports</code>) and OpenAPI 3.0.3 schema (
+              <code className="font-mono">/api/docs</code>) are authenticated via Firebase Bearer
+              tokens and scoped to the active clinic boundary. CareDesk Assistant runs through a
+              clinic-isolated Local REST Adapter ready for Synapse CLI MCP connection.
             </p>
           </div>
 
@@ -213,7 +215,14 @@ export function SettingsView({
             <div className="py-3 flex items-center justify-between gap-3">
               <div className="flex items-center gap-2 text-[#111C17] font-medium">
                 <CheckCircle2 className="w-4 h-4 text-[#059669] shrink-0" aria-hidden="true" />
-                <span>SQLite Relational Backend &amp; Conflict Rules</span>
+                <span>Firebase Auth &amp; Server RBAC Enforcement</span>
+              </div>
+              <span className="font-mono text-[#047857]">Active</span>
+            </div>
+            <div className="py-3 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-[#111C17] font-medium">
+                <CheckCircle2 className="w-4 h-4 text-[#059669] shrink-0" aria-hidden="true" />
+                <span>SQLite Multi-Clinic Isolation &amp; Conflict Rules</span>
               </div>
               <span className="font-mono text-[#047857]">Active</span>
             </div>
@@ -229,7 +238,7 @@ export function SettingsView({
                 <Info className="w-4 h-4 text-amber-600 shrink-0" aria-hidden="true" />
                 <span>Synapse CLI MCP Server Connection</span>
               </div>
-              <span className="font-mono text-amber-700">Pending Integration</span>
+              <span className="font-mono text-amber-700">Ready</span>
             </div>
           </div>
         </section>

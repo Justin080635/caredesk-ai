@@ -4,13 +4,17 @@ import {
   createFollowupRecord,
   fetchFollowups,
   fetchPatients,
+  fetchStaff,
   updateFollowupRecord,
 } from '../client/api';
+import { FOLLOWUP_STATUSES, FOLLOWUP_TYPES } from '../shared/constants';
 import type {
   FollowUpPriority,
   FollowUpStatus,
   FollowUpTask,
+  FollowUpType,
   Patient,
+  StaffMember,
 } from '../shared/types';
 import { ClinicEmptyIllustration, EditorialAvatar } from './ClinicIllustrations';
 import { ModalShell } from './ModalShell';
@@ -23,7 +27,23 @@ interface FollowUpsViewProps {
   openCreateSignal: number;
   initialViewMode?: 'pending' | 'overdue' | 'Completed' | 'all';
   onOpenPatient?: (patientId: string) => void;
+  canManageFollowups?: boolean;
   compactDensity?: boolean;
+}
+
+const OPEN_FOLLOWUP_STATUSES = new Set<FollowUpStatus>([
+  'Pending',
+  'Scheduled',
+  'Due',
+  'Overdue',
+]);
+
+function isTaskOpen(task: FollowUpTask): boolean {
+  return OPEN_FOLLOWUP_STATUSES.has(task.status);
+}
+
+function isTaskOverdue(task: FollowUpTask, todayKey: string): boolean {
+  return task.status === 'Overdue' || (isTaskOpen(task) && task.dueDate < todayKey);
 }
 
 export function FollowUpsView({
@@ -33,23 +53,29 @@ export function FollowUpsView({
   openCreateSignal,
   initialViewMode,
   onOpenPatient,
+  canManageFollowups = true,
   compactDensity = false,
 }: FollowUpsViewProps) {
   const [tasks, setTasks] = useState<FollowUpTask[]>([]);
   const [allTasksSnapshot, setAllTasksSnapshot] = useState<FollowUpTask[]>([]);
   const [patients, setPatients] = useState<Patient[]>([]);
+  const [staffList, setStaffList] = useState<StaffMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'pending' | 'overdue' | 'Completed' | 'all'>(
     initialViewMode ?? 'pending'
   );
   const [priorityFilter, setPriorityFilter] = useState('All');
+  const [typeFilter, setTypeFilter] = useState('All');
   const [updatingTaskId, setUpdatingTaskId] = useState<string | null>(null);
 
   // Create Modal State
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [patientId, setPatientId] = useState('P-1042');
   const [appointmentId, setAppointmentId] = useState('');
+  const [followupType, setFollowupType] = useState<FollowUpType>('Administrative Contact');
+  const [assignedStaffId, setAssignedStaffId] = useState('');
   const [description, setDescription] = useState('');
+  const [reason, setReason] = useState('');
   const [priority, setPriority] = useState<FollowUpPriority>('High');
   const [dueDate, setDueDate] = useState(() => {
     const d = new Date();
@@ -61,7 +87,11 @@ export function FollowUpsView({
 
   // Edit Follow-up Modal State
   const [editingTask, setEditingTask] = useState<FollowUpTask | null>(null);
+  const [editFollowupType, setEditFollowupType] = useState<FollowUpType>('Administrative Contact');
+  const [editAssignedStaffId, setEditAssignedStaffId] = useState('');
   const [editDescription, setEditDescription] = useState('');
+  const [editReason, setEditReason] = useState('');
+  const [editCompletionNotes, setEditCompletionNotes] = useState('');
   const [editPriority, setEditPriority] = useState<FollowUpPriority>('Medium');
   const [editDueDate, setEditDueDate] = useState('');
   const [editStatus, setEditStatus] = useState<FollowUpStatus>('Pending');
@@ -82,33 +112,42 @@ export function FollowUpsView({
   const loadTasks = useCallback(async () => {
     setLoading(true);
     try {
-      const [taskList, allSnapshot, patientList] = await Promise.all([
+      const [taskList, allSnapshot, patientList, staffMembers] = await Promise.all([
         viewMode === 'pending' || viewMode === 'overdue'
-          ? fetchFollowups({ pendingOnly: true })
+          ? fetchFollowups({
+              pendingOnly: true,
+              followupType: typeFilter,
+            })
           : fetchFollowups({
               status: viewMode === 'all' ? undefined : viewMode,
               priority: priorityFilter,
+              followupType: typeFilter,
             }),
         fetchFollowups(),
         fetchPatients(),
+        fetchStaff(),
       ]);
 
       let filtered = taskList;
       if (viewMode === 'overdue') {
-        filtered = filtered.filter((t) => t.dueDate < todayKey);
+        filtered = filtered.filter((t) => isTaskOverdue(t, todayKey));
       }
       if ((viewMode === 'pending' || viewMode === 'overdue') && priorityFilter !== 'All') {
         filtered = filtered.filter((t) => t.priority === priorityFilter);
       }
+      if ((viewMode === 'pending' || viewMode === 'overdue') && typeFilter !== 'All') {
+        filtered = filtered.filter((t) => (t.followupType ?? 'Administrative Contact') === typeFilter);
+      }
       setTasks(filtered);
       setAllTasksSnapshot(allSnapshot);
       setPatients(patientList);
+      setStaffList(staffMembers);
     } catch (err) {
       onErrorNotice(err instanceof Error ? err.message : 'Unable to load follow-up tasks.');
     } finally {
       setLoading(false);
     }
-  }, [viewMode, priorityFilter, todayKey, onErrorNotice]);
+  }, [viewMode, priorityFilter, typeFilter, todayKey, onErrorNotice]);
 
   useEffect(() => {
     loadTasks();
@@ -151,7 +190,11 @@ export function FollowUpsView({
 
   const openEditModal = (task: FollowUpTask) => {
     setEditingTask(task);
+    setEditFollowupType(task.followupType ?? 'Administrative Contact');
+    setEditAssignedStaffId(task.assignedStaffId ?? '');
     setEditDescription(task.description);
+    setEditReason(task.reason ?? '');
+    setEditCompletionNotes(task.completionNotes ?? '');
     setEditPriority(task.priority);
     setEditDueDate(task.dueDate);
     setEditStatus(task.status);
@@ -168,8 +211,14 @@ export function FollowUpsView({
     setEditError(null);
     setEditSubmitting(true);
     try {
+      const assignedStaff = staffList.find((s) => s.id === editAssignedStaffId);
       const updated = await updateFollowupRecord(editingTask.id, {
+        followupType: editFollowupType,
+        assignedStaffId: editAssignedStaffId || null,
+        assignedToName: assignedStaff?.fullName ?? undefined,
         description: editDescription.trim(),
+        reason: editReason.trim(),
+        completionNotes: editCompletionNotes.trim(),
         priority: editPriority,
         dueDate: editDueDate,
         status: editStatus,
@@ -196,15 +245,21 @@ export function FollowUpsView({
     setFormError(null);
     setSubmitting(true);
     try {
+      const assignedStaff = staffList.find((s) => s.id === assignedStaffId);
       const created = await createFollowupRecord({
         patientId,
         appointmentId: appointmentId.trim() || null,
+        followupType,
+        assignedStaffId: assignedStaffId || null,
+        assignedToName: assignedStaff?.fullName ?? undefined,
         description: description.trim(),
+        reason: reason.trim() || undefined,
         priority,
         dueDate,
       });
       setShowCreateModal(false);
       setDescription('');
+      setReason('');
       setAppointmentId('');
       onSuccessNotice(`Created follow-up task ${created.id} for ${created.patientId}.`);
       await loadTasks();
@@ -218,14 +273,10 @@ export function FollowUpsView({
 
   const cellPad = compactDensity ? 'py-2 px-4' : 'py-3 px-4';
 
-  const openQueueCount = allTasksSnapshot.filter(
-    (t) => t.status === 'Pending' || t.status === 'In Progress'
-  ).length;
-  const overdueQueueCount = allTasksSnapshot.filter(
-    (t) => (t.status === 'Pending' || t.status === 'In Progress') && t.dueDate < todayKey
-  ).length;
+  const openQueueCount = allTasksSnapshot.filter((t) => isTaskOpen(t)).length;
+  const overdueQueueCount = allTasksSnapshot.filter((t) => isTaskOverdue(t, todayKey)).length;
   const highPriorityOpenCount = allTasksSnapshot.filter(
-    (t) => (t.status === 'Pending' || t.status === 'In Progress') && t.priority === 'High'
+    (t) => isTaskOpen(t) && t.priority === 'High'
   ).length;
   const completedCount = allTasksSnapshot.filter((t) => t.status === 'Completed').length;
 
@@ -243,7 +294,7 @@ export function FollowUpsView({
             {openQueueCount}
           </div>
           <div className="text-[11px] text-emerald-100/75 mt-0.5">
-            Pending &amp; in-progress tasks
+            Pending, scheduled, due &amp; overdue
           </div>
         </button>
 
@@ -336,19 +387,40 @@ export function FollowUpsView({
               <option value="Low">Low Priority</option>
             </select>
           </div>
+
+          <div>
+            <label htmlFor="fu-type-filter" className="sr-only">
+              Filter by type
+            </label>
+            <select
+              id="fu-type-filter"
+              value={typeFilter}
+              onChange={(e) => setTypeFilter(e.target.value)}
+              className="px-3 py-2 text-xs font-medium border border-[#D4DAD4] rounded-lg bg-white"
+            >
+              <option value="All">All Types</option>
+              {FOLLOWUP_TYPES.map((ft) => (
+                <option key={ft} value={ft}>
+                  {ft}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
-        <button
-          type="button"
-          onClick={() => {
-            setFormError(null);
-            setShowCreateModal(true);
-          }}
-          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg transition-colors whitespace-nowrap shrink-0 btn-press"
-        >
-          <Plus className="w-4 h-4" aria-hidden="true" />
-          New Follow-up
-        </button>
+        {canManageFollowups && (
+          <button
+            type="button"
+            onClick={() => {
+              setFormError(null);
+              setShowCreateModal(true);
+            }}
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg transition-colors whitespace-nowrap shrink-0 btn-press"
+          >
+            <Plus className="w-4 h-4" aria-hidden="true" />
+            New Follow-up
+          </button>
+        )}
       </div>
 
       {/* Follow-up Table */}
@@ -422,9 +494,7 @@ export function FollowUpsView({
               </thead>
               <tbody className="divide-y divide-[#E4E7E2] text-sm">
                 {tasks.map((task) => {
-                  const isOverdue =
-                    (task.status === 'Pending' || task.status === 'In Progress') &&
-                    task.dueDate < todayKey;
+                  const isOverdue = isTaskOverdue(task, todayKey);
                   const isRowBusy = updatingTaskId === task.id;
                   const displayPatient = task.patientName ?? task.patientId;
                   return (
@@ -434,6 +504,9 @@ export function FollowUpsView({
                         {task.appointmentId && (
                           <div className="text-[#526058]">{task.appointmentId}</div>
                         )}
+                        <div className="text-[10px] font-sans text-[#047857] mt-0.5">
+                          {task.followupType ?? 'Administrative Contact'}
+                        </div>
                       </td>
                       <td className={cellPad}>
                         <div className="flex items-center gap-2.5">
@@ -458,28 +531,43 @@ export function FollowUpsView({
                           )}
                         </div>
                       </td>
-                      <td className={`${cellPad} text-xs text-[#16211C] max-w-md`}>
-                        {task.description}
+                      <td className={`${cellPad} text-xs text-[#16211C] max-w-md space-y-1`}>
+                        <div>{task.description}</div>
+                        {task.reason && (
+                          <div className="text-[11px] text-[#526259]">Reason: {task.reason}</div>
+                        )}
+                        {task.assignedToName && (
+                          <div className="text-[11px] text-[#047857]">
+                            Owner: {task.assignedToName}
+                          </div>
+                        )}
+                        {task.completionNotes && (
+                          <div className="text-[11px] text-[#34433B] bg-[#F6F8F6] px-2 py-1 rounded border border-[#E3E8E4]">
+                            Outcome: {task.completionNotes}
+                          </div>
+                        )}
                       </td>
                       <td className={`${cellPad} text-xs whitespace-nowrap`}>
                         <div className="flex items-center gap-2">
                           <PriorityText priority={task.priority} />
-                          <select
-                            aria-label={`Change priority for ${task.id}`}
-                            value={task.priority}
-                            disabled={isRowBusy}
-                            onChange={(e) =>
-                              handleQuickPriorityChange(
-                                task.id,
-                                e.target.value as FollowUpPriority
-                              )
-                            }
-                            className="px-1.5 py-0.5 text-[11px] border border-[#D4DAD4] rounded bg-white text-[#16211C] disabled:opacity-50"
-                          >
-                            <option value="High">High</option>
-                            <option value="Medium">Medium</option>
-                            <option value="Low">Low</option>
-                          </select>
+                          {canManageFollowups && (
+                            <select
+                              aria-label={`Change priority for ${task.id}`}
+                              value={task.priority}
+                              disabled={isRowBusy}
+                              onChange={(e) =>
+                                handleQuickPriorityChange(
+                                  task.id,
+                                  e.target.value as FollowUpPriority
+                                )
+                              }
+                              className="px-1.5 py-0.5 text-[11px] border border-[#D4DAD4] rounded bg-white text-[#16211C] disabled:opacity-50"
+                            >
+                              <option value="High">High</option>
+                              <option value="Medium">Medium</option>
+                              <option value="Low">Low</option>
+                            </select>
+                          )}
                         </div>
                         <div
                           className={`font-mono tabular-nums mt-1 flex items-center gap-1 ${
@@ -496,58 +584,62 @@ export function FollowUpsView({
                         <FollowUpStatusText status={task.status} />
                       </td>
                       <td className={`${cellPad} text-right whitespace-nowrap`}>
-                        <div className="inline-flex items-center gap-2.5">
-                          <button
-                            type="button"
-                            disabled={isRowBusy}
-                            onClick={() => openEditModal(task)}
-                            className="inline-flex items-center gap-1 text-xs font-medium text-[#0C291E] hover:text-[#047857] disabled:opacity-50"
-                            aria-label={`Edit follow-up ${task.id}`}
-                          >
-                            <Pencil className="w-3 h-3" aria-hidden="true" />
-                            Edit
-                          </button>
-                          {task.status === 'Pending' && (
+                        {canManageFollowups ? (
+                          <div className="inline-flex items-center gap-2.5">
                             <button
                               type="button"
                               disabled={isRowBusy}
-                              onClick={() => handleStatusChange(task.id, 'In Progress')}
-                              className="text-xs font-medium text-[#047857] hover:text-[#0C291E] disabled:opacity-50"
+                              onClick={() => openEditModal(task)}
+                              className="inline-flex items-center gap-1 text-xs font-medium text-[#0C291E] hover:text-[#047857] disabled:opacity-50"
+                              aria-label={`Edit follow-up ${task.id}`}
                             >
-                              Start
+                              <Pencil className="w-3 h-3" aria-hidden="true" />
+                              Edit
                             </button>
-                          )}
-                          {(task.status === 'Pending' || task.status === 'In Progress') && (
-                            <>
+                            {task.status === 'Pending' && (
                               <button
                                 type="button"
                                 disabled={isRowBusy}
-                                onClick={() => handleStatusChange(task.id, 'Completed')}
-                                className="text-xs font-medium text-emerald-700 hover:text-emerald-800 disabled:opacity-50"
+                                onClick={() => handleStatusChange(task.id, 'Scheduled')}
+                                className="text-xs font-medium text-[#047857] hover:text-[#0C291E] disabled:opacity-50"
                               >
-                                Complete
+                                Schedule
                               </button>
+                            )}
+                            {isTaskOpen(task) && (
+                              <>
+                                <button
+                                  type="button"
+                                  disabled={isRowBusy}
+                                  onClick={() => handleStatusChange(task.id, 'Completed')}
+                                  className="text-xs font-medium text-emerald-700 hover:text-emerald-800 disabled:opacity-50"
+                                >
+                                  Complete
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={isRowBusy}
+                                  onClick={() => handleStatusChange(task.id, 'Cancelled')}
+                                  className="text-xs font-medium text-[#526058] hover:text-[#16211C] disabled:opacity-50"
+                                >
+                                  Cancel
+                                </button>
+                              </>
+                            )}
+                            {(task.status === 'Completed' || task.status === 'Cancelled') && (
                               <button
                                 type="button"
                                 disabled={isRowBusy}
-                                onClick={() => handleStatusChange(task.id, 'Dismissed')}
+                                onClick={() => handleStatusChange(task.id, 'Pending')}
                                 className="text-xs font-medium text-[#526058] hover:text-[#16211C] disabled:opacity-50"
                               >
-                                Dismiss
+                                Reopen
                               </button>
-                            </>
-                          )}
-                          {(task.status === 'Completed' || task.status === 'Dismissed') && (
-                            <button
-                              type="button"
-                              disabled={isRowBusy}
-                              onClick={() => handleStatusChange(task.id, 'Pending')}
-                              className="text-xs font-medium text-[#526058] hover:text-[#16211C] disabled:opacity-50"
-                            >
-                              Reopen
-                            </button>
-                          )}
-                        </div>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-xs text-[#6C7B73]">View only</span>
+                        )}
                       </td>
                     </tr>
                   );
@@ -619,6 +711,44 @@ export function FollowUpsView({
                 </div>
               </div>
 
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label htmlFor="fu-type" className="block text-xs font-medium text-[#16211C] mb-1">
+                    Follow-up Category
+                  </label>
+                  <select
+                    id="fu-type"
+                    value={followupType}
+                    onChange={(e) => setFollowupType(e.target.value as FollowUpType)}
+                    className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg bg-white"
+                  >
+                    {FOLLOWUP_TYPES.map((ft) => (
+                      <option key={ft} value={ft}>
+                        {ft}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="fu-owner" className="block text-xs font-medium text-[#16211C] mb-1">
+                    Assigned Staff Owner (Optional)
+                  </label>
+                  <select
+                    id="fu-owner"
+                    value={assignedStaffId}
+                    onChange={(e) => setAssignedStaffId(e.target.value)}
+                    className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg bg-white"
+                  >
+                    <option value="">Unassigned (Clinic Queue)</option>
+                    {staffList.map((stf) => (
+                      <option key={stf.id} value={stf.id}>
+                        {stf.fullName} ({stf.role})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
               <div>
                 <label htmlFor="fu-description" className="block text-xs font-medium text-[#16211C] mb-1">
                   Task Description
@@ -626,10 +756,24 @@ export function FollowUpsView({
                 <textarea
                   id="fu-description"
                   required
-                  rows={3}
+                  rows={2}
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  placeholder="Describe administrative outreach or verification action..."
+                  placeholder="Describe administrative outreach or clinical follow-up action..."
+                  className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="fu-reason" className="block text-xs font-medium text-[#16211C] mb-1">
+                  Reason / Context (Optional)
+                </label>
+                <input
+                  id="fu-reason"
+                  type="text"
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  placeholder="e.g. Missed Cardiology consultation or lab check"
                   className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg"
                 />
               </div>
@@ -719,6 +863,44 @@ export function FollowUpsView({
             )}
 
             <form onSubmit={handleEditSubmit} className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label htmlFor="edit-fu-type" className="block text-xs font-medium text-[#16211C] mb-1">
+                    Category
+                  </label>
+                  <select
+                    id="edit-fu-type"
+                    value={editFollowupType}
+                    onChange={(e) => setEditFollowupType(e.target.value as FollowUpType)}
+                    className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg bg-white"
+                  >
+                    {FOLLOWUP_TYPES.map((ft) => (
+                      <option key={ft} value={ft}>
+                        {ft}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="edit-fu-owner" className="block text-xs font-medium text-[#16211C] mb-1">
+                    Assigned Staff Owner
+                  </label>
+                  <select
+                    id="edit-fu-owner"
+                    value={editAssignedStaffId}
+                    onChange={(e) => setEditAssignedStaffId(e.target.value)}
+                    className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg bg-white"
+                  >
+                    <option value="">Unassigned (Clinic Queue)</option>
+                    {staffList.map((stf) => (
+                      <option key={stf.id} value={stf.id}>
+                        {stf.fullName} ({stf.role})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
               <div>
                 <label htmlFor="edit-fu-description" className="block text-xs font-medium text-[#16211C] mb-1">
                   Task Description
@@ -726,9 +908,22 @@ export function FollowUpsView({
                 <textarea
                   id="edit-fu-description"
                   required
-                  rows={3}
+                  rows={2}
                   value={editDescription}
                   onChange={(e) => setEditDescription(e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="edit-fu-reason" className="block text-xs font-medium text-[#16211C] mb-1">
+                  Reason / Context
+                </label>
+                <input
+                  id="edit-fu-reason"
+                  type="text"
+                  value={editReason}
+                  onChange={(e) => setEditReason(e.target.value)}
                   className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg"
                 />
               </div>
@@ -760,10 +955,11 @@ export function FollowUpsView({
                     onChange={(e) => setEditStatus(e.target.value as FollowUpStatus)}
                     className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg bg-white"
                   >
-                    <option value="Pending">Pending</option>
-                    <option value="In Progress">In Progress</option>
-                    <option value="Completed">Completed</option>
-                    <option value="Dismissed">Dismissed</option>
+                    {FOLLOWUP_STATUSES.map((st) => (
+                      <option key={st} value={st}>
+                        {st}
+                      </option>
+                    ))}
                   </select>
                 </div>
 
@@ -780,6 +976,20 @@ export function FollowUpsView({
                     className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg"
                   />
                 </div>
+              </div>
+
+              <div>
+                <label htmlFor="edit-fu-completion" className="block text-xs font-medium text-[#16211C] mb-1">
+                  Completion / Outcome Notes
+                </label>
+                <input
+                  id="edit-fu-completion"
+                  type="text"
+                  value={editCompletionNotes}
+                  onChange={(e) => setEditCompletionNotes(e.target.value)}
+                  placeholder="Summary of outreach call or clinical completion..."
+                  className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg"
+                />
               </div>
 
               <div className="flex items-center justify-end gap-3 pt-2 border-t border-[#E4E7E2]">

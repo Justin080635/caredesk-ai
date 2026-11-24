@@ -9,32 +9,47 @@ import {
   ChevronDown,
   ChevronRight,
   Clock,
+  FileText,
   History,
   Info,
   Loader2,
+  MessageSquarePlus,
   RotateCcw,
   Send,
   ShieldAlert,
   Square,
+  Trash2,
   Wrench,
 } from 'lucide-react';
 import {
   confirmAssistantAction,
+  createAiConversation,
+  deleteAiConversation,
+  fetchAiConversationDetail,
+  fetchAiConversations,
   fetchDailyReport,
+  fetchDoctorDashboard,
   fetchOverviewReport,
+  fetchPatientPortalHome,
   streamAssistantQuery,
 } from '../client/api';
 import type {
+  AccountRole,
+  AiConversationSummary,
   Appointment,
   AssistantResponse,
   AvailableSlot,
+  ConsultationRecord,
   DailyReport,
+  DoctorAvailabilitySummary,
+  DoctorDashboardData,
   FollowUpTask,
   OverviewReport,
+  PatientHomeData,
 } from '../shared/types';
 import type { DashboardFilteredTarget } from './DashboardView';
 import { MarkdownRenderer } from './MarkdownRenderer';
-import { AppointmentStatusText, PriorityText } from './StatusText';
+import { AppointmentStatusText, DoctorDutyStatusText, PriorityText } from './StatusText';
 
 interface LiveToolStep {
   toolCallId: string;
@@ -58,26 +73,69 @@ interface ChatTurn {
   selectedSlotOverride?: AvailableSlot;
 }
 
-const PROMPT_GROUPS = [
-  {
-    label: 'Briefings & Queue Audits',
-    prompts: [
-      "Give me today's clinic briefing.",
-      'Show pending appointments.',
-      'Identify overdue follow-ups.',
-      'Identify patients who missed appointments during the last seven days.',
-    ],
-  },
-  {
-    label: 'Outreach & Scheduling Actions',
-    prompts: [
-      'Prepare an administrative follow-up list.',
-      'Find available appointment slots.',
-      'Show patient P-1042.',
-      'Reschedule patient P-1042.',
-    ],
-  },
-];
+const PROMPT_GROUPS_BY_ROLE: Record<
+  'admin' | 'Doctor' | 'Patient',
+  Array<{ label: string; prompts: string[] }>
+> = {
+  admin: [
+    {
+      label: 'Briefings & Queue Audits',
+      prompts: [
+        "Give me today's clinic briefing.",
+        'Show pending appointments.',
+        'Identify overdue follow-ups.',
+        'Identify patients who missed appointments during the last seven days.',
+      ],
+    },
+    {
+      label: 'Doctors, Slots & Scheduling',
+      prompts: [
+        'Which doctors are available today?',
+        'Prepare an administrative follow-up list.',
+        'Find available appointment slots.',
+        'Reschedule patient P-1042.',
+      ],
+    },
+  ],
+  Doctor: [
+    {
+      label: 'My Schedule & Visits',
+      prompts: [
+        'Show my appointments for today.',
+        'What is my next appointment?',
+        'Summarize my schedule and leave blocks.',
+        'Which follow-ups require my attention?',
+      ],
+    },
+    {
+      label: 'Patient Lookup & Clinical Prep',
+      prompts: [
+        'Show patient P-1042.',
+        'Summarize recent consultations I authored.',
+        'Check open follow-ups assigned to me.',
+      ],
+    },
+  ],
+  Patient: [
+    {
+      label: 'My Appointments & Slots',
+      prompts: [
+        'When is my next appointment?',
+        'Show all my upcoming appointments.',
+        'Find open appointment slots in Cardiology.',
+        'Find open appointment slots this week.',
+      ],
+    },
+    {
+      label: 'My Health & Follow-ups',
+      prompts: [
+        'Summarize my recent consultations and prescriptions.',
+        'Show my lab and test results.',
+        'What follow-up instructions do I have?',
+      ],
+    },
+  ],
+};
 
 function getTimeGreeting(): string {
   const hr = new Date().getHours();
@@ -87,6 +145,7 @@ function getTimeGreeting(): string {
 }
 
 interface AssistantViewProps {
+  role?: AccountRole;
   onDataMutated: () => void;
   onErrorNotice: (msg: string) => void;
   onSuccessNotice: (msg: string) => void;
@@ -96,6 +155,7 @@ interface AssistantViewProps {
 }
 
 export function AssistantView({
+  role = 'Clinic Administrator',
   onDataMutated,
   onErrorNotice,
   onSuccessNotice,
@@ -106,17 +166,22 @@ export function AssistantView({
   const [input, setInput] = useState('');
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [loading, setLoading] = useState(false);
-  const [streamPhase, setStreamPhase] = useState<string>('Preparing administrative query...');
+  const [streamPhase, setStreamPhase] = useState<string>('Preparing workspace query...');
   const [liveTools, setLiveTools] = useState<LiveToolStep[]>([]);
   const [streamingText, setStreamingText] = useState('');
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [confirmErrorByTurn, setConfirmErrorByTurn] = useState<Record<string, string>>({});
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
   const [expandedTraceIds, setExpandedTraceIds] = useState<Set<string>>(new Set());
+  const [conversations, setConversations] = useState<AiConversationSummary[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [loadingConversations, setLoadingConversations] = useState(false);
   const [clinicBrief, setClinicBrief] = useState<{
     daily: DailyReport | null;
     overview: OverviewReport | null;
-  }>({ daily: null, overview: null });
+    doctorDash: DoctorDashboardData | null;
+    patientHome: PatientHomeData | null;
+  }>({ daily: null, overview: null, doctorDash: null, patientHome: null });
 
   const feedContainerRef = useRef<HTMLDivElement | null>(null);
   const feedEndRef = useRef<HTMLDivElement | null>(null);
@@ -125,19 +190,47 @@ export function AssistantView({
   const abortControllerRef = useRef<AbortController | null>(null);
   const consumedPromptRef = useRef<string | null>(null);
 
+  const loadConversations = useCallback(async () => {
+    setLoadingConversations(true);
+    try {
+      const list = await fetchAiConversations();
+      setConversations(list);
+    } catch {
+      // Non-blocking conversation list
+    } finally {
+      setLoadingConversations(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadConversations();
+  }, [loadConversations]);
+
   useEffect(() => {
     let active = true;
-    Promise.all([fetchDailyReport(), fetchOverviewReport()])
-      .then(([daily, overview]) => {
-        if (active) setClinicBrief({ daily, overview });
-      })
-      .catch(() => {
-        // Non-blocking context enrichment; welcome prompt actions still work directly.
-      });
+    if (role === 'Patient') {
+      fetchPatientPortalHome()
+        .then((patientHome) => {
+          if (active) setClinicBrief({ daily: null, overview: null, doctorDash: null, patientHome });
+        })
+        .catch(() => {});
+    } else if (role === 'Doctor') {
+      fetchDoctorDashboard()
+        .then((doctorDash) => {
+          if (active) setClinicBrief({ daily: null, overview: null, doctorDash, patientHome: null });
+        })
+        .catch(() => {});
+    } else {
+      Promise.all([fetchDailyReport(), fetchOverviewReport()])
+        .then(([daily, overview]) => {
+          if (active) setClinicBrief({ daily, overview, doctorDash: null, patientHome: null });
+        })
+        .catch(() => {});
+    }
     return () => {
       active = false;
     };
-  }, []);
+  }, [role]);
 
   // Auto-size multiline composer cleanly between 42px and 140px
   useEffect(() => {
@@ -193,7 +286,13 @@ export function AssistantView({
       setTurns((prev) => [...prev, userTurn]);
       setInput('');
       setLoading(true);
-      setStreamPhase('Interpreting administrative request...');
+      setStreamPhase(
+        role === 'Patient'
+          ? 'Checking your verified clinic records...'
+          : role === 'Doctor'
+            ? 'Checking your clinical schedule & caseload...'
+            : 'Interpreting administrative request...'
+      );
       setLiveTools([]);
       setStreamingText('');
 
@@ -202,6 +301,7 @@ export function AssistantView({
 
       try {
         const response = await streamAssistantQuery(trimmed, {
+          conversationId: activeConversationId ?? undefined,
           signal: controller.signal,
           onEvent: (event) => {
             if (event.type === 'status') {
@@ -236,6 +336,10 @@ export function AssistantView({
           },
         });
 
+        if (response.conversationId) {
+          setActiveConversationId(response.conversationId);
+        }
+
         setTurns((prev) => [
           ...prev,
           {
@@ -246,6 +350,7 @@ export function AssistantView({
             response,
           },
         ]);
+        loadConversations();
       } catch (err) {
         const isAbort = err instanceof Error && err.name === 'AbortError';
         if (isAbort) {
@@ -282,8 +387,57 @@ export function AssistantView({
         setStreamingText('');
       }
     },
-    [loading, onErrorNotice]
+    [loading, onErrorNotice, role, activeConversationId, loadConversations]
   );
+
+  const handleOpenSavedConversation = async (convId: string) => {
+    if (loading) return;
+    try {
+      const detail = await fetchAiConversationDetail(convId);
+      setActiveConversationId(detail.id);
+      setDismissedIds(new Set());
+      setConfirmErrorByTurn({});
+      setTurns(
+        detail.messages.map((m) => ({
+          id: m.id,
+          role: m.role,
+          text: m.content,
+          timestamp: m.createdAt.slice(11, 16),
+          response: m.response ?? undefined,
+        }))
+      );
+    } catch (err) {
+      onErrorNotice(err instanceof Error ? err.message : 'Unable to load saved conversation.');
+    }
+  };
+
+  const handleNewConversation = async () => {
+    if (loading) return;
+    setTurns([]);
+    setDismissedIds(new Set());
+    setExpandedTraceIds(new Set());
+    setConfirmErrorByTurn({});
+    try {
+      const created = await createAiConversation();
+      setActiveConversationId(created.id);
+      loadConversations();
+    } catch {
+      setActiveConversationId(null);
+    }
+  };
+
+  const handleDeleteSavedConversation = async (convId: string) => {
+    try {
+      await deleteAiConversation(convId);
+      if (activeConversationId === convId) {
+        setActiveConversationId(null);
+        setTurns([]);
+      }
+      loadConversations();
+    } catch (err) {
+      onErrorNotice(err instanceof Error ? err.message : 'Unable to delete conversation.');
+    }
+  };
 
   useEffect(() => {
     if (initialPrompt && initialPrompt !== consumedPromptRef.current) {
@@ -383,59 +537,194 @@ export function AssistantView({
     return acc;
   }, []);
 
-  const welcomeCards = [
-    {
-      title: "Give me today's clinic briefing.",
-      subtitle: clinicBrief.daily
-        ? `${clinicBrief.daily.totalAppointments} scheduled visits on ${clinicBrief.daily.date}`
-        : 'Structured 5-part overview & operational alerts',
-    },
-    {
-      title: 'Show pending appointments.',
-      subtitle: clinicBrief.daily
-        ? `${clinicBrief.daily.unconfirmedAppointments} awaiting patient confirmation`
-        : 'Inspect Scheduled visits needing outreach',
-    },
-    {
-      title: 'Identify overdue follow-ups.',
-      subtitle: clinicBrief.overview
-        ? `${clinicBrief.overview.pendingFollowUpsCount} open · ${clinicBrief.overview.overdueFollowUpsCount} overdue`
-        : 'Audit pending administrative follow-up queue',
-    },
-    {
-      title: 'Find available appointment slots.',
-      subtitle: 'Search conflict-free 30-minute clinician openings',
-    },
-  ];
+  const promptGroups =
+    role === 'Doctor'
+      ? PROMPT_GROUPS_BY_ROLE.Doctor
+      : role === 'Patient'
+        ? PROMPT_GROUPS_BY_ROLE.Patient
+        : PROMPT_GROUPS_BY_ROLE.admin;
+
+  const welcomeCards =
+    role === 'Doctor'
+      ? [
+          {
+            title: 'Show my appointments for today.',
+            subtitle: clinicBrief.doctorDash
+              ? `${clinicBrief.doctorDash.todayAppointments.length} assigned visits · ${clinicBrief.doctorDash.effectiveOperationalState}`
+              : 'View your live patient queue and statuses',
+          },
+          {
+            title: 'What is my next appointment?',
+            subtitle: clinicBrief.doctorDash?.nextAppointment
+              ? `${clinicBrief.doctorDash.nextAppointment.appointmentTime} · ${clinicBrief.doctorDash.nextAppointment.patientName}`
+              : 'Inspect your next scheduled patient visit',
+          },
+          {
+            title: 'Which follow-ups require my attention?',
+            subtitle: clinicBrief.doctorDash
+              ? `${clinicBrief.doctorDash.followupsRequiringAttention.length} open tasks assigned to you`
+              : 'Audit clinical and administrative follow-ups',
+          },
+          {
+            title: 'Summarize my schedule and leave blocks.',
+            subtitle: 'Check weekly hours, break windows & unavailability',
+          },
+        ]
+      : role === 'Patient'
+        ? [
+            {
+              title: 'When is my next appointment?',
+              subtitle: clinicBrief.patientHome?.nextAppointment
+                ? `${clinicBrief.patientHome.nextAppointment.appointmentDate} · ${clinicBrief.patientHome.nextAppointment.clinician}`
+                : 'Check your upcoming clinic visits',
+            },
+            {
+              title: 'Find open appointment slots this week.',
+              subtitle: 'Browse real-time available slots across doctors',
+            },
+            {
+              title: 'Summarize my recent consultations and prescriptions.',
+              subtitle: clinicBrief.patientHome
+                ? `${clinicBrief.patientHome.recentConsultationsCount} published doctor record(s)`
+                : 'View doctor-approved notes and prescriptions',
+            },
+            {
+              title: 'What follow-up instructions do I have?',
+              subtitle: clinicBrief.patientHome
+                ? `${clinicBrief.patientHome.openFollowups.length} active follow-up item(s)`
+                : 'Review care recommendations and next steps',
+            },
+          ]
+        : [
+            {
+              title: "Give me today's clinic briefing.",
+              subtitle: clinicBrief.daily
+                ? `${clinicBrief.daily.totalAppointments} scheduled visits on ${clinicBrief.daily.date}`
+                : 'Structured 5-part overview & operational alerts',
+            },
+            {
+              title: 'Which doctors are available today?',
+              subtitle: 'Check live duty states, capacity & open slots',
+            },
+            {
+              title: 'Identify overdue follow-ups.',
+              subtitle: clinicBrief.overview
+                ? `${clinicBrief.overview.pendingFollowUpsCount} open · ${clinicBrief.overview.overdueFollowUpsCount} overdue`
+                : 'Audit pending administrative follow-up queue',
+            },
+            {
+              title: 'Find available appointment slots.',
+              subtitle: 'Search conflict-free 30-minute clinician openings',
+            },
+          ];
 
   const lastTurnId = turns[turns.length - 1]?.id;
 
   return (
     <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
-      {/* Left Rail: Integration Status, Prompt Library, Session History & Guardrails */}
+      {/* Left Rail: Integration Status, Prompt Library, Persistent Conversations & Guardrails */}
       <aside className="xl:col-span-4 space-y-5">
         <div className="bg-[#0B261C] text-white rounded-xl p-5 space-y-2">
           <div className="flex items-center gap-2 text-xs font-semibold text-emerald-300">
             <Info className="w-4 h-4 shrink-0" aria-hidden="true" />
-            <span>Local REST Adapter · Synapse MCP Ready</span>
+            <span>
+              {role === 'Patient'
+                ? 'Patient-Scoped Care Assistant'
+                : role === 'Doctor'
+                  ? 'Doctor Operations & Clinical Assistant'
+                  : 'Local REST Adapter · Synapse MCP Ready'}
+            </span>
           </div>
           <p className="text-xs text-emerald-100/80 leading-relaxed">
-            Every query executes live SQLite queries through CareDesk&apos;s REST adapter. Synapse CLI MCP tools are <strong className="text-white">not yet connected</strong>; real tool calls and execution timings appear inline.
+            {role === 'Patient'
+              ? 'Strictly isolated to your verified clinic records, upcoming appointments, and doctor-approved health summaries.'
+              : role === 'Doctor'
+                ? 'Scoped to your assigned appointments, weekly schedule, consultation records, and follow-up queue.'
+                : 'Every query executes live SQLite queries through CareDesk’s REST adapter with role-based permissions.'}
           </p>
+        </div>
+
+        {/* Saved Conversations */}
+        <div className="card-surface rounded-xl p-5 space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <History className="w-4 h-4 text-[#047857]" aria-hidden="true" />
+              <h2 className="text-sm font-semibold text-[#111C17]">Saved Conversations</h2>
+            </div>
+            <button
+              type="button"
+              disabled={loading}
+              onClick={handleNewConversation}
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-[#0B261C] bg-[#ECF4EF] hover:bg-[#DCECE3] rounded-md disabled:opacity-50"
+            >
+              <MessageSquarePlus className="w-3.5 h-3.5 text-[#047857]" aria-hidden="true" />
+              New Chat
+            </button>
+          </div>
+          {loadingConversations ? (
+            <p className="text-xs text-[#526259]">Loading conversations...</p>
+          ) : conversations.length === 0 ? (
+            <p className="text-xs text-[#526259]">
+              Your conversations are automatically saved per workspace and account.
+            </p>
+          ) : (
+            <div className="divide-y divide-[#EEF2EF] max-h-44 overflow-y-auto pr-1">
+              {conversations.map((conv) => {
+                const isSelected = activeConversationId === conv.id;
+                return (
+                  <div
+                    key={conv.id}
+                    className={`py-2 px-2 rounded-md flex items-center justify-between gap-2 ${
+                      isSelected ? 'bg-[#ECF4EF]' : 'hover:bg-[#F6F8F6]'
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => handleOpenSavedConversation(conv.id)}
+                      className="text-left min-w-0 flex-1"
+                    >
+                      <div className="text-xs font-medium text-[#111C17] truncate">
+                        {conv.title}
+                      </div>
+                      <div className="text-[11px] font-mono text-[#526259]">
+                        {conv.messageCount} msg · {conv.updatedAt.slice(0, 10)}
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteSavedConversation(conv.id)}
+                      aria-label={`Delete conversation ${conv.title}`}
+                      className="p-1 text-[#6C7B73] hover:text-red-700 shrink-0"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         <div className="card-surface rounded-xl p-5 space-y-4">
           <div>
             <h2 className="text-sm font-semibold text-[#111C17]">
-              Operational Prompt Library
+              {role === 'Patient'
+                ? 'Patient Assistant Prompts'
+                : role === 'Doctor'
+                  ? 'Doctor Assistant Prompts'
+                  : 'Operational Prompt Library'}
             </h2>
             <p className="text-xs text-[#526259] mt-0.5">
-              Run clinic briefings, queue audits, patient lookups, or confirmation-gated rescheduling.
+              {role === 'Patient'
+                ? 'Check upcoming appointments, open slots, prescriptions, and follow-up guidance.'
+                : role === 'Doctor'
+                  ? 'Inspect today’s schedule, patient context, consultations, and follow-ups.'
+                  : 'Run clinic briefings, live doctor availability, or confirmation-gated rescheduling.'}
             </p>
           </div>
 
           <div className="space-y-4">
-            {PROMPT_GROUPS.map((group) => (
+            {promptGroups.map((group) => (
               <div key={group.label} className="space-y-2">
                 <div className="text-[11px] font-semibold tracking-wide text-[#526259]">
                   {group.label}
@@ -465,14 +754,14 @@ export function AssistantView({
               <div className="flex items-center gap-2">
                 <History className="w-4 h-4 text-[#047857]" aria-hidden="true" />
                 <h3 className="text-sm font-semibold text-[#111C17]">
-                  Session History
+                  Current Thread Jumps
                 </h3>
               </div>
               <span className="text-[11px] font-mono tabular-nums text-[#526259]">
                 {conversationHistory.length} quer{conversationHistory.length === 1 ? 'y' : 'ies'}
               </span>
             </div>
-            <div className="divide-y divide-[#EEF2EF] max-h-48 overflow-y-auto pr-1">
+            <div className="divide-y divide-[#EEF2EF] max-h-40 overflow-y-auto pr-1">
               {conversationHistory.map((item) => (
                 <button
                   key={item.id}
@@ -498,12 +787,24 @@ export function AssistantView({
             <ShieldAlert className="w-4 h-4 text-[#526259] mt-0.5 shrink-0" aria-hidden="true" />
             <div>
               <h3 className="text-xs font-semibold text-[#111C17]">
-                Administrative Scope Guardrails
+                {role === 'Patient'
+                  ? 'Patient Privacy & Medical Guardrails'
+                  : 'Role & Operational Guardrails'}
               </h3>
               <ul className="mt-2 space-y-1.5 text-xs text-[#526259]">
-                <li>• Synthetic demonstration records only</li>
-                <li>• Non-clinical operations only (no diagnosis or treatment guidance)</li>
-                <li>• Explicit administrator approval required before modifying records</li>
+                {role === 'Patient' ? (
+                  <>
+                    <li>• Strictly isolated to your verified patient record only</li>
+                    <li>• Shows only doctor-published consultations &amp; instructions</li>
+                    <li>• Does not provide autonomous medical diagnosis</li>
+                  </>
+                ) : (
+                  <>
+                    <li>• Enforces clinic boundary &amp; role-based permissions</li>
+                    <li>• Non-autonomous: grounded in real SQLite clinic records</li>
+                    <li>• Explicit confirmation required before modifying schedules</li>
+                  </>
+                )}
               </ul>
             </div>
           </div>
@@ -522,10 +823,14 @@ export function AssistantView({
             </div>
             <div className="min-w-0">
               <h2 className="text-base font-semibold text-[#111C17] truncate">
-                CareDesk Assistant
+                {role === 'Patient'
+                  ? 'CareDesk Patient Assistant'
+                  : role === 'Doctor'
+                    ? 'CareDesk Doctor Copilot'
+                    : 'CareDesk Assistant'}
               </h2>
               <p className="text-xs text-[#526259] mt-0.5 truncate">
-                Healthcare operations copilot · Live REST queries · Synapse MCP pending
+                {role} workspace · Live clinic database queries · Persistent history
               </p>
             </div>
           </div>
@@ -533,12 +838,7 @@ export function AssistantView({
             <button
               type="button"
               disabled={loading}
-              onClick={() => {
-                setTurns([]);
-                setDismissedIds(new Set());
-                setExpandedTraceIds(new Set());
-                setConfirmErrorByTurn({});
-              }}
+              onClick={handleNewConversation}
               className="btn-press px-3 py-1.5 text-xs font-medium text-[#526259] hover:text-[#111C17] border border-[#E3E8E4] hover:bg-[#F6F8F6] rounded-lg whitespace-nowrap shrink-0 disabled:opacity-50"
             >
               New Conversation
@@ -797,7 +1097,9 @@ export function AssistantView({
                         res.structuredData.type === 'unconfirmed_appointments' ||
                         res.structuredData.type === 'missed_appointments' ||
                         res.structuredData.type === 'followup_plan' ||
-                        res.structuredData.type === 'patient_summary') && (
+                        res.structuredData.type === 'patient_summary' ||
+                        res.structuredData.type === 'doctor_schedule' ||
+                        res.structuredData.type === 'patient_appointments') && (
                         <div className="overflow-x-auto bg-white border border-[#E3E8E4] rounded-lg">
                           <table className="w-full text-left border-collapse text-xs">
                             <thead>
@@ -964,8 +1266,79 @@ export function AssistantView({
                         </div>
                       )}
 
+                    {/* Structured Data: Doctor Availability Summary */}
+                    {res?.structuredData?.items &&
+                      res.structuredData.items.length > 0 &&
+                      res.structuredData.type === 'doctor_availability' && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          {(res.structuredData.items as DoctorAvailabilitySummary[]).map((doc) => (
+                            <div
+                              key={doc.staffId}
+                              className="bg-[#F9FBFA] border border-[#E3E8E4] rounded-lg p-3.5 space-y-2 text-xs"
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div>
+                                  <div className="font-semibold text-[#111C17]">{doc.fullName}</div>
+                                  <div className="text-[#526259]">
+                                    {doc.department} · {doc.specialty}
+                                  </div>
+                                </div>
+                                <DoctorDutyStatusText status={doc.effectiveOperationalState} />
+                              </div>
+                              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-[#526259]">
+                                <span>{doc.workingHoursLabel}</span>
+                                <span>
+                                  Load {doc.bookedCount}/{doc.maxDailyCapacity}
+                                </span>
+                              </div>
+                              {doc.nextAvailableSlot && (
+                                <div className="text-[11px] text-[#047857] font-mono">
+                                  Next open: {doc.nextAvailableSlot.date} {doc.nextAvailableSlot.time}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                    {/* Structured Data: Consultation Summary */}
+                    {res?.structuredData?.items &&
+                      res.structuredData.items.length > 0 &&
+                      res.structuredData.type === 'consultation_summary' && (
+                        <div className="space-y-2.5">
+                          {(res.structuredData.items as ConsultationRecord[]).map((rec) => (
+                            <div
+                              key={rec.id}
+                              className="bg-[#F9FBFA] border border-[#E3E8E4] rounded-lg p-3.5 space-y-1.5 text-xs"
+                            >
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <span className="font-mono font-semibold text-[#0B261C]">
+                                  {rec.consultationDate} · {rec.doctorName}
+                                </span>
+                                <span className="inline-flex items-center gap-1 text-[11px] font-mono text-[#047857]">
+                                  <FileText className="w-3 h-3" aria-hidden="true" />
+                                  {rec.id}
+                                </span>
+                              </div>
+                              <p className="text-[#111C17] leading-relaxed">{rec.summary}</p>
+                              {rec.recommendations && (
+                                <p className="text-[#526259]">
+                                  Guidance: {rec.recommendations}
+                                </p>
+                              )}
+                              {rec.prescriptions.length > 0 && (
+                                <div className="text-[11px] font-mono text-[#047857]">
+                                  {rec.prescriptions.length} prescription(s):{' '}
+                                  {rec.prescriptions.map((p) => p.medication).join(', ')}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
                     {/* Integrated Human Approval Card for Mutations */}
-                    {pending && !isConfirmed && !isDismissed && (
+                    {pending && role !== 'Patient' && !isConfirmed && !isDismissed && (
                       <div className="bg-[#F9FBFA] border border-amber-300 rounded-xl p-4 space-y-3">
                         <div className="flex items-start gap-2.5">
                           <AlertCircle
@@ -1260,7 +1633,13 @@ export function AssistantView({
                     }
                   }
                 }}
-                placeholder="Ask for today's briefing, pending appointments, overdue follow-ups, or reschedule P-1042..."
+                placeholder={
+                  role === 'Patient'
+                    ? 'Ask about your next appointment, open slots, prescriptions, or follow-ups...'
+                    : role === 'Doctor'
+                      ? 'Ask about today’s queue, your next patient, schedule, or follow-ups...'
+                      : "Ask for today's briefing, doctor availability, overdue follow-ups, or reschedule P-1042..."
+                }
                 className="flex-1 resize-none px-2.5 py-2 text-sm bg-transparent border-0 focus:outline-none leading-relaxed max-h-[140px]"
               />
               {loading ? (
@@ -1286,7 +1665,11 @@ export function AssistantView({
             </div>
             <div className="flex items-center justify-between text-[11px] text-[#64746B] px-1">
               <span>Press Enter to send · Shift+Enter for new line</span>
-              <span>Non-clinical administrative queries only</span>
+              <span>
+                {role === 'Patient'
+                  ? 'Verified personal records only'
+                  : 'Role-isolated operational & care support'}
+              </span>
             </div>
           </div>
         </form>
