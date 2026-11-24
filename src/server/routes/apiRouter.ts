@@ -1,13 +1,22 @@
-import { Router, type Response } from 'express';
+import { Router, type Request, type Response } from 'express';
 import type { DatabaseSync } from 'node:sqlite';
 import type { AppointmentType } from '../../shared/types';
 import {
   type AuthenticatedRequest,
+  callFirebaseIdentityEndpoint,
+  callFirebaseSecureTokenRefresh,
   createAuthGuards,
+  createDemoSessionToken,
+  DEMO_PERSONAS,
+  type DemoPersonaKey,
+  FirebaseProxyError,
   getFirebasePublicConfig,
+  isDemoAuthEnabled,
   type TokenVerifier,
 } from '../auth/session';
+import { DEFAULT_DEMO_CLINIC_ID } from '../db/database';
 import { seedClinicStarterData } from '../db/seed';
+import { isValidEmail } from '../domain/rules';
 import {
   inviteClinicMember,
   listClinicsDirectory,
@@ -103,6 +112,15 @@ import { getStaffDetail, listStaff, updateStaffMember } from '../services/staffS
 import { buildOpenApiSpec } from './openapi';
 
 function handleRouteError(res: Response, err: unknown) {
+  if (err instanceof FirebaseProxyError) {
+    res.status(err.statusCode).json({
+      error: {
+        code: err.firebaseCode,
+        message: err.message,
+      },
+    });
+    return;
+  }
   if (err instanceof ServiceError) {
     res.status(err.statusCode).json({
       error: {
@@ -120,6 +138,92 @@ function handleRouteError(res: Response, err: unknown) {
       message,
     },
   });
+}
+
+// Sliding-window rate limiter for same-origin Firebase auth proxy routes
+const authAttemptBuckets = new Map<string, number[]>();
+const AUTH_RATE_WINDOW_MS = 10 * 60 * 1000;
+const AUTH_RATE_MAX_ATTEMPTS = 15;
+
+function enforceAuthRateLimit(req: Request, emailHint = ''): void {
+  const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
+  const key = `${clientIp}:${emailHint.trim().toLowerCase()}`;
+  const now = Date.now();
+
+  if (authAttemptBuckets.size > 1000) {
+    for (const [k, timestamps] of authAttemptBuckets.entries()) {
+      if (timestamps.every((t) => now - t > AUTH_RATE_WINDOW_MS)) {
+        authAttemptBuckets.delete(k);
+      }
+    }
+  }
+
+  const recent = (authAttemptBuckets.get(key) ?? []).filter((t) => now - t <= AUTH_RATE_WINDOW_MS);
+  if (recent.length >= AUTH_RATE_MAX_ATTEMPTS) {
+    throw new FirebaseProxyError(
+      429,
+      'auth/too-many-requests',
+      'Too many authentication attempts. Please wait a few minutes and try again.'
+    );
+  }
+  recent.push(now);
+  authAttemptBuckets.set(key, recent);
+}
+
+function ensureDemoSandboxAccount(db: DatabaseSync, personaKey: DemoPersonaKey): void {
+  const spec = DEMO_PERSONAS[personaKey];
+  const synced = syncAuthenticatedUser(db, {
+    firebaseUid: spec.uid,
+    email: spec.email,
+    fullName: spec.name,
+    authProvider: 'demo-sandbox',
+    requestedClinicId: DEFAULT_DEMO_CLINIC_ID,
+  });
+
+  const clinicRow = db
+    .prepare('SELECT id FROM clinics WHERE id = ?')
+    .get(DEFAULT_DEMO_CLINIC_ID) as { id: string } | undefined;
+  if (!clinicRow) return;
+
+  const nowIso = new Date().toISOString();
+  const membershipId = `MEM-DEMO-${personaKey.toUpperCase()}`;
+  db.prepare(
+    `INSERT INTO clinic_memberships (id, clinic_id, user_id, role, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'Active', ?, ?)
+     ON CONFLICT(clinic_id, user_id) DO UPDATE SET role = excluded.role, status = 'Active', updated_at = excluded.updated_at`
+  ).run(membershipId, DEFAULT_DEMO_CLINIC_ID, synced.user.id, spec.role, nowIso, nowIso);
+
+  if (personaKey === 'doctor') {
+    const staffRow = db
+      .prepare(
+        `SELECT id, user_id, email FROM staff
+         WHERE clinic_id = ? AND (LOWER(email) = ? OR LOWER(full_name) = 'dr. samuel okafor')
+         LIMIT 1`
+      )
+      .get(DEFAULT_DEMO_CLINIC_ID, spec.email.toLowerCase()) as
+      | { id: string; user_id: string | null; email: string }
+      | undefined;
+    if (staffRow && (!staffRow.user_id || staffRow.user_id === synced.user.id)) {
+      db.prepare(
+        `UPDATE staff
+         SET user_id = ?, email = CASE WHEN TRIM(email) = '' THEN ? ELSE email END, updated_at = ?
+         WHERE id = ? AND clinic_id = ?`
+      ).run(synced.user.id, spec.email, nowIso, staffRow.id, DEFAULT_DEMO_CLINIC_ID);
+    }
+  }
+
+  if (personaKey === 'patient' && spec.linkedPatientId) {
+    const patientRow = db
+      .prepare('SELECT id, linked_user_id FROM patients WHERE id = ? AND clinic_id = ?')
+      .get(spec.linkedPatientId, DEFAULT_DEMO_CLINIC_ID) as
+      | { id: string; linked_user_id: string | null }
+      | undefined;
+    if (patientRow && (!patientRow.linked_user_id || patientRow.linked_user_id === synced.user.id)) {
+      db.prepare(
+        `UPDATE patients SET linked_user_id = ?, portal_linked_at = ? WHERE id = ? AND clinic_id = ?`
+      ).run(synced.user.id, nowIso, spec.linkedPatientId, DEFAULT_DEMO_CLINIC_ID);
+    }
+  }
 }
 
 export function createClinicApiRouter(
@@ -192,12 +296,294 @@ export function createClinicApiRouter(
       data: {
         firebaseConfigured: firebase.configured,
         projectId: firebase.projectId,
+        demoAuthEnabled: isDemoAuthEnabled(),
         providers: {
           google: firebase.configured,
           emailPassword: firebase.configured,
         },
       },
     });
+  });
+
+  // Option 1: Same-Origin Firebase Email/Password Proxy Routes
+  router.post('/auth/email-signin', async (req, res) => {
+    try {
+      const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+      const password = typeof req.body?.password === 'string' ? req.body.password : '';
+      if (!email || !isValidEmail(email)) {
+        throw new FirebaseProxyError(400, 'auth/invalid-email', 'Please enter a valid email address.');
+      }
+      if (!password) {
+        throw new FirebaseProxyError(400, 'auth/invalid-credential', 'Enter both your email address and password.');
+      }
+      enforceAuthRateLimit(req, email);
+
+      const fbRes = await callFirebaseIdentityEndpoint<{
+        idToken?: string;
+        refreshToken?: string;
+        expiresIn?: string | number;
+        localId?: string;
+        email?: string;
+        displayName?: string;
+      }>('accounts:signInWithPassword', {
+        email,
+        password,
+        returnSecureToken: true,
+      });
+
+      res.json({
+        data: {
+          idToken: String(fbRes.idToken ?? ''),
+          refreshToken: String(fbRes.refreshToken ?? ''),
+          expiresIn: Number(fbRes.expiresIn ?? 3600) || 3600,
+          uid: String(fbRes.localId ?? ''),
+          email: String(fbRes.email ?? email),
+          displayName: String(fbRes.displayName ?? ''),
+        },
+      });
+    } catch (err) {
+      handleRouteError(res, err);
+    }
+  });
+
+  router.post('/auth/email-register', async (req, res) => {
+    try {
+      const fullName = typeof req.body?.fullName === 'string' ? req.body.fullName.trim() : '';
+      const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+      const password = typeof req.body?.password === 'string' ? req.body.password : '';
+
+      if (fullName && fullName.length < 2) {
+        throw new FirebaseProxyError(400, 'auth/invalid-display-name', 'Full name must be at least 2 characters.');
+      }
+      if (!email || !isValidEmail(email)) {
+        throw new FirebaseProxyError(400, 'auth/invalid-email', 'Please enter a valid email address.');
+      }
+      if (password.length < 6) {
+        throw new FirebaseProxyError(400, 'auth/weak-password', 'Password must be at least 6 characters.');
+      }
+      enforceAuthRateLimit(req, email);
+
+      const signUpRes = await callFirebaseIdentityEndpoint<{
+        idToken?: string;
+        refreshToken?: string;
+        expiresIn?: string | number;
+        localId?: string;
+        email?: string;
+      }>('accounts:signUp', {
+        email,
+        password,
+        returnSecureToken: true,
+      });
+
+      let idToken = String(signUpRes.idToken ?? '');
+      let refreshToken = String(signUpRes.refreshToken ?? '');
+      let expiresIn = Number(signUpRes.expiresIn ?? 3600) || 3600;
+      let displayName = fullName;
+
+      if (fullName && idToken) {
+        try {
+          const updated = await callFirebaseIdentityEndpoint<{
+            idToken?: string;
+            refreshToken?: string;
+            expiresIn?: string | number;
+            displayName?: string;
+          }>('accounts:update', {
+            idToken,
+            displayName: fullName,
+            returnSecureToken: true,
+          });
+          if (updated.idToken) idToken = String(updated.idToken);
+          if (updated.refreshToken) refreshToken = String(updated.refreshToken);
+          if (updated.expiresIn) expiresIn = Number(updated.expiresIn) || expiresIn;
+          if (updated.displayName) displayName = String(updated.displayName);
+        } catch {
+          // Display name still gets synced via /api/auth/sync
+        }
+      }
+
+      res.json({
+        data: {
+          idToken,
+          refreshToken,
+          expiresIn,
+          uid: String(signUpRes.localId ?? ''),
+          email: String(signUpRes.email ?? email),
+          displayName,
+        },
+      });
+    } catch (err) {
+      handleRouteError(res, err);
+    }
+  });
+
+  router.post('/auth/email-reset', async (req, res) => {
+    try {
+      const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+      if (!email || !isValidEmail(email)) {
+        throw new FirebaseProxyError(400, 'auth/invalid-email', 'Please enter a valid email address.');
+      }
+      enforceAuthRateLimit(req, email);
+
+      await callFirebaseIdentityEndpoint('accounts:sendOobCode', {
+        requestType: 'PASSWORD_RESET',
+        email,
+      });
+
+      res.json({ data: { sent: true } });
+    } catch (err) {
+      handleRouteError(res, err);
+    }
+  });
+
+  router.post('/auth/email-refresh', async (req, res) => {
+    try {
+      const refreshToken =
+        typeof req.body?.refreshToken === 'string' ? req.body.refreshToken.trim() : '';
+      if (!refreshToken) {
+        throw new FirebaseProxyError(400, 'auth/invalid-user-token', 'Missing refresh token.');
+      }
+      enforceAuthRateLimit(req, 'token-refresh');
+      const refreshed = await callFirebaseSecureTokenRefresh(refreshToken);
+      res.json({ data: refreshed });
+    } catch (err) {
+      handleRouteError(res, err);
+    }
+  });
+
+  router.post(
+    '/auth/email-password',
+    requireAuthenticatedUser,
+    async (req: AuthenticatedRequest, res) => {
+      try {
+        const identity = req.authIdentity!;
+        if (identity.provider === 'demo-sandbox') {
+          throw new FirebaseProxyError(
+            400,
+            'auth/operation-not-allowed',
+            'Demo preview accounts do not use a personal password.'
+          );
+        }
+        const currentPassword =
+          typeof req.body?.currentPassword === 'string' ? req.body.currentPassword : '';
+        const newPassword = typeof req.body?.newPassword === 'string' ? req.body.newPassword : '';
+        if (!currentPassword || newPassword.length < 6) {
+          throw new FirebaseProxyError(
+            400,
+            'auth/weak-password',
+            'Current password is required and new password must be at least 6 characters.'
+          );
+        }
+        enforceAuthRateLimit(req, identity.email);
+
+        // Re-verify existing credentials before mutating password
+        const verified = await callFirebaseIdentityEndpoint<{ idToken?: string }>(
+          'accounts:signInWithPassword',
+          {
+            email: identity.email,
+            password: currentPassword,
+            returnSecureToken: true,
+          }
+        );
+
+        const updated = await callFirebaseIdentityEndpoint<{
+          idToken?: string;
+          refreshToken?: string;
+          expiresIn?: string | number;
+        }>('accounts:update', {
+          idToken: String(verified.idToken ?? ''),
+          password: newPassword,
+          returnSecureToken: true,
+        });
+
+        res.json({
+          data: {
+            idToken: String(updated.idToken ?? ''),
+            refreshToken: String(updated.refreshToken ?? ''),
+            expiresIn: Number(updated.expiresIn ?? 3600) || 3600,
+          },
+        });
+      } catch (err) {
+        handleRouteError(res, err);
+      }
+    }
+  );
+
+  router.post(
+    '/auth/email-profile',
+    requireAuthenticatedUser,
+    async (req: AuthenticatedRequest, res) => {
+      try {
+        const identity = req.authIdentity!;
+        if (identity.provider === 'demo-sandbox') {
+          res.json({ data: { updated: true } });
+          return;
+        }
+        const fullName = typeof req.body?.fullName === 'string' ? req.body.fullName.trim() : '';
+        const bearerToken = (req.header('authorization') ?? '').replace(/^Bearer\s+/i, '').trim();
+        if (!fullName || !bearerToken) {
+          res.json({ data: { updated: false } });
+          return;
+        }
+        const updated = await callFirebaseIdentityEndpoint<{
+          idToken?: string;
+          refreshToken?: string;
+          expiresIn?: string | number;
+        }>('accounts:update', {
+          idToken: bearerToken,
+          displayName: fullName,
+          returnSecureToken: true,
+        });
+        res.json({
+          data: {
+            updated: true,
+            idToken: updated.idToken ? String(updated.idToken) : undefined,
+            refreshToken: updated.refreshToken ? String(updated.refreshToken) : undefined,
+            expiresIn: updated.expiresIn ? Number(updated.expiresIn) : undefined,
+          },
+        });
+      } catch (err) {
+        handleRouteError(res, err);
+      }
+    }
+  );
+
+  // Option 3: Signed Preview/Development Sandbox Demo Sign-In
+  router.post('/auth/demo-signin', (req, res) => {
+    try {
+      if (!isDemoAuthEnabled()) {
+        throw new FirebaseProxyError(
+          403,
+          'auth/operation-not-allowed',
+          'Preview demo sign-in is disabled in production mode.'
+        );
+      }
+      const persona = typeof req.body?.persona === 'string' ? req.body.persona.trim() : 'administrator';
+      if (persona !== 'administrator' && persona !== 'doctor' && persona !== 'patient') {
+        throw new FirebaseProxyError(
+          400,
+          'auth/invalid-credential',
+          'Select Clinic Administrator, Doctor, or Patient for preview demo access.'
+        );
+      }
+
+      ensureDemoSandboxAccount(db, persona);
+      const issued = createDemoSessionToken(persona);
+      res.json({
+        data: {
+          token: issued.token,
+          expiresIn: issued.expiresIn,
+          persona,
+          user: {
+            uid: issued.identity.uid,
+            email: issued.identity.email,
+            displayName: issued.identity.name ?? '',
+            providerId: 'demo-sandbox',
+          },
+        },
+      });
+    } catch (err) {
+      handleRouteError(res, err);
+    }
   });
 
   // Public/Auth Directory for Doctor & Patient Onboarding Clinic Selection

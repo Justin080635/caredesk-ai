@@ -746,9 +746,9 @@ export function AppointmentsView({
     <div className="space-y-5 animate-view-enter">
       {/* Toolbar & Calendar/List Toggle */}
       <div className="card-surface rounded-[24px] p-4 space-y-3.5">
-        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2 flex-1 min-w-0">
-            <div className="relative flex-1 min-w-[175px] max-w-[230px]">
+            <div className="relative flex-1 min-w-[165px]">
               <Search
                 className="w-4 h-4 text-[#6B7B73] absolute left-3 top-1/2 -translate-y-1/2"
                 aria-hidden="true"
@@ -765,7 +765,7 @@ export function AppointmentsView({
                   setPage(1);
                 }}
                 placeholder="Search ID, patient, doctor..."
-                className="w-full pl-9 pr-3 py-2 text-xs sm:text-sm bg-[#FAFBF9] border border-[#DCE8E0] rounded-full focus:bg-white focus:outline-none focus:border-[#34C38F]"
+                className="w-full pl-9 pr-3 py-2 text-xs bg-[#FAFBF9] border border-[#DCE8E0] rounded-full focus:bg-white focus:outline-none focus:border-[#34C38F]"
               />
             </div>
 
@@ -812,7 +812,7 @@ export function AppointmentsView({
                   setDeptFilter(e.target.value);
                   setPage(1);
                 }}
-                className="px-3 py-2 text-xs bg-[#FAFBF9] border border-[#DCE8E0] rounded-full"
+                className="px-3 py-2 text-xs bg-[#FAFBF9] border border-[#DCE8E0] rounded-full max-w-[155px]"
               >
                 <option value="All">All Departments</option>
                 {CLINIC_DEPARTMENTS.map((dept) => (
@@ -834,7 +834,7 @@ export function AppointmentsView({
                   setClinicianFilter(e.target.value);
                   setPage(1);
                 }}
-                className="px-3 py-2 text-xs bg-[#FAFBF9] border border-[#DCE8E0] rounded-full"
+                className="px-3 py-2 text-xs bg-[#FAFBF9] border border-[#DCE8E0] rounded-full max-w-[155px]"
               >
                 <option value="All">All Clinicians</option>
                 {clinicianOptions.map((c) => (
@@ -887,7 +887,7 @@ export function AppointmentsView({
 
         {/* Status Pills */}
         <div
-          className="flex items-center gap-1 p-1 bg-[#EEF3EF] border border-[#DCE8E0] rounded-full overflow-x-auto w-fit max-w-full"
+          className="flex flex-wrap items-center gap-1 p-1 bg-[#EEF3EF] border border-[#DCE8E0] rounded-2xl sm:rounded-full w-fit max-w-full"
           role="group"
           aria-label="Filter appointments by status"
         >
@@ -899,7 +899,7 @@ export function AppointmentsView({
                 setStatusFilter(st);
                 setPage(1);
               }}
-              className={`px-3.5 py-1 text-xs font-semibold rounded-full transition-colors whitespace-nowrap shrink-0 ${
+              className={`px-3 sm:px-3.5 py-1 text-xs font-semibold rounded-full transition-colors whitespace-nowrap shrink-0 ${
                 statusFilter === st
                   ? 'bg-white text-[#0F3D2E] shadow-xs'
                   : 'text-[#6B7B73] hover:text-[#1C2B25]'

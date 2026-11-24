@@ -3,7 +3,14 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import type { DatabaseSync } from 'node:sqlite';
 import { createExpressApp } from '../../server';
-import type { TokenVerifier, VerifiedFirebaseIdentity } from './auth/session';
+import {
+  createDemoSessionToken,
+  isDemoAuthEnabled,
+  type TokenVerifier,
+  type VerifiedFirebaseIdentity,
+  verifyDemoSessionToken,
+  verifySessionToken,
+} from './auth/session';
 import { createDatabase, DEFAULT_DEMO_CLINIC_ID } from './db/database';
 import { seedDatabaseIfEmpty } from './db/seed';
 import { getClinicTodayDate } from './domain/rules';
@@ -1120,3 +1127,207 @@ test('Patient portal verified claim-code flow prevents email auto-linking and en
     assert.equal(reschedReqJson.data.requestStatus, 'Reschedule Requested');
   });
 });
+
+test('Option 3 demo tokens verify HMAC signatures cleanly and disable automatically in production', async () => {
+  const prevNodeEnv = process.env.NODE_ENV;
+  const prevDemoFlag = process.env.CAREDESK_ENABLE_DEMO_AUTH;
+  try {
+    process.env.NODE_ENV = 'development';
+    delete process.env.CAREDESK_ENABLE_DEMO_AUTH;
+    assert.equal(isDemoAuthEnabled(), true);
+
+    const issued = createDemoSessionToken('doctor');
+    assert.ok(issued.token.startsWith('cd_demo.'));
+
+    const verified = verifyDemoSessionToken(issued.token);
+    assert.ok(verified);
+    assert.equal(verified.uid, 'demo-sandbox-doctor');
+    assert.equal(verified.email, 'samuel.okafor@caredesk.example.org');
+
+    const unified = await verifySessionToken(issued.token);
+    assert.equal(unified?.uid, 'demo-sandbox-doctor');
+
+    // Reject tampered payload or signature
+    const parts = issued.token.split('.');
+    const tamperedSig = `cd_demo.${parts[1]}.${parts[2].slice(0, -2)}xx`;
+    assert.equal(verifyDemoSessionToken(tamperedSig), null);
+
+    const forgedPayload = Buffer.from(
+      JSON.stringify({ persona: 'administrator', exp: Math.floor(Date.now() / 1000) + 3600 }),
+      'utf8'
+    ).toString('base64url');
+    assert.equal(verifyDemoSessionToken(`cd_demo.${forgedPayload}.${parts[2]}`), null);
+
+    // Production disables demo tokens unless explicitly opted in
+    process.env.NODE_ENV = 'production';
+    assert.equal(isDemoAuthEnabled(), false);
+    assert.equal(verifyDemoSessionToken(issued.token), null);
+
+    process.env.CAREDESK_ENABLE_DEMO_AUTH = 'true';
+    assert.equal(isDemoAuthEnabled(), true);
+    assert.equal(verifyDemoSessionToken(issued.token)?.uid, 'demo-sandbox-doctor');
+  } finally {
+    if (prevNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = prevNodeEnv;
+    if (prevDemoFlag === undefined) delete process.env.CAREDESK_ENABLE_DEMO_AUTH;
+    else process.env.CAREDESK_ENABLE_DEMO_AUTH = prevDemoFlag;
+  }
+});
+
+test('Option 3 /api/auth/demo-signin enforces role isolation and production disablement', async () => {
+  const db = createDatabase(':memory:');
+  seedDatabaseIfEmpty(db);
+  const app = createExpressApp(db);
+
+  const server = http.createServer(app);
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const addr = server.address();
+  assert.ok(addr && typeof addr !== 'string');
+  const baseUrl = `http://127.0.0.1:${addr.port}`;
+
+  const prevNodeEnv = process.env.NODE_ENV;
+  const prevDemoFlag = process.env.CAREDESK_ENABLE_DEMO_AUTH;
+
+  try {
+    process.env.NODE_ENV = 'development';
+    delete process.env.CAREDESK_ENABLE_DEMO_AUTH;
+
+    const cfgRes = await fetch(`${baseUrl}/api/auth/config`);
+    assert.equal(cfgRes.status, 200);
+    const cfgJson = (await cfgRes.json()) as { data: { demoAuthEnabled: boolean } };
+    assert.equal(cfgJson.data.demoAuthEnabled, true);
+
+    // Invalid persona rejected cleanly
+    const badPersonaRes = await fetch(`${baseUrl}/api/auth/demo-signin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ persona: 'superuser' }),
+    });
+    assert.equal(badPersonaRes.status, 400);
+
+    // 1. Administrator demo sign-in -> full clinic dashboard access
+    const adminSigninRes = await fetch(`${baseUrl}/api/auth/demo-signin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ persona: 'administrator' }),
+    });
+    assert.equal(adminSigninRes.status, 200);
+    const adminToken = ((await adminSigninRes.json()) as { data: { token: string } }).data.token;
+    const adminOverview = await fetch(`${baseUrl}/api/reports/overview`, {
+      headers: { Authorization: `Bearer ${adminToken}`, 'X-Clinic-Id': DEFAULT_DEMO_CLINIC_ID },
+    });
+    assert.equal(adminOverview.status, 200);
+
+    // 2. Doctor demo sign-in -> links Dr. Samuel Okafor, blocked from admin-only endpoints
+    const doctorSigninRes = await fetch(`${baseUrl}/api/auth/demo-signin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ persona: 'doctor' }),
+    });
+    assert.equal(doctorSigninRes.status, 200);
+    const doctorToken = ((await doctorSigninRes.json()) as { data: { token: string } }).data.token;
+    const docDashRes = await fetch(`${baseUrl}/api/doctor/dashboard`, {
+      headers: { Authorization: `Bearer ${doctorToken}`, 'X-Clinic-Id': DEFAULT_DEMO_CLINIC_ID },
+    });
+    assert.equal(docDashRes.status, 200);
+    const docDash = (await docDashRes.json()) as { data: { doctor: { fullName: string } } };
+    assert.equal(docDash.data.doctor.fullName, 'Dr. Samuel Okafor');
+
+    const docBlockedStaffWrite = await fetch(`${baseUrl}/api/clinic`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${doctorToken}`,
+        'X-Clinic-Id': DEFAULT_DEMO_CLINIC_ID,
+      },
+      body: JSON.stringify({ name: 'Tampered Clinic Name' }),
+    });
+    assert.equal(docBlockedStaffWrite.status, 403);
+
+    // 3. Patient demo sign-in -> accesses Eleanor Vance portal, blocked from clinic-wide records
+    const patientSigninRes = await fetch(`${baseUrl}/api/auth/demo-signin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ persona: 'patient' }),
+    });
+    assert.equal(patientSigninRes.status, 200);
+    const patientToken = ((await patientSigninRes.json()) as { data: { token: string } }).data.token;
+    const ptHealthRes = await fetch(`${baseUrl}/api/patient-portal/health`, {
+      headers: { Authorization: `Bearer ${patientToken}`, 'X-Clinic-Id': DEFAULT_DEMO_CLINIC_ID },
+    });
+    assert.equal(ptHealthRes.status, 200);
+
+    const ptBlockedPatients = await fetch(`${baseUrl}/api/patients`, {
+      headers: { Authorization: `Bearer ${patientToken}`, 'X-Clinic-Id': DEFAULT_DEMO_CLINIC_ID },
+    });
+    assert.equal(ptBlockedPatients.status, 403);
+
+    // 4. Production environment blocks /api/auth/demo-signin
+    process.env.NODE_ENV = 'production';
+    delete process.env.CAREDESK_ENABLE_DEMO_AUTH;
+    const prodBlockedRes = await fetch(`${baseUrl}/api/auth/demo-signin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ persona: 'administrator' }),
+    });
+    assert.equal(prodBlockedRes.status, 403);
+  } finally {
+    if (prevNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = prevNodeEnv;
+    if (prevDemoFlag === undefined) delete process.env.CAREDESK_ENABLE_DEMO_AUTH;
+    else process.env.CAREDESK_ENABLE_DEMO_AUTH = prevDemoFlag;
+    server.close();
+    db.close();
+  }
+});
+
+test('Option 1 same-origin Firebase proxy routes validate inputs cleanly', async () => {
+  await withTestServer(async (baseUrl) => {
+    const badEmailSignin = await fetch(`${baseUrl}/api/auth/email-signin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'not-an-email', password: 'secret' }),
+    });
+    assert.equal(badEmailSignin.status, 400);
+    const badEmailJson = (await badEmailSignin.json()) as { error: { code: string } };
+    assert.equal(badEmailJson.error.code, 'auth/invalid-email');
+
+    const emptyPasswordSignin = await fetch(`${baseUrl}/api/auth/email-signin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'user@example.org', password: '' }),
+    });
+    assert.equal(emptyPasswordSignin.status, 400);
+
+    const weakRegister = await fetch(`${baseUrl}/api/auth/email-register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fullName: 'Dr. Test User', email: 'test@example.org', password: '123' }),
+    });
+    assert.equal(weakRegister.status, 400);
+    const weakJson = (await weakRegister.json()) as { error: { code: string } };
+    assert.equal(weakJson.error.code, 'auth/weak-password');
+
+    const badReset = await fetch(`${baseUrl}/api/auth/email-reset`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'bad' }),
+    });
+    assert.equal(badReset.status, 400);
+
+    const missingRefresh = await fetch(`${baseUrl}/api/auth/email-refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    assert.equal(missingRefresh.status, 400);
+
+    const unauthPasswordChange = await fetch(`${baseUrl}/api/auth/email-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ currentPassword: 'old', newPassword: 'newpassword1' }),
+    });
+    assert.equal(unauthPasswordChange.status, 401);
+  });
+});
+

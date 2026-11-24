@@ -19,7 +19,6 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import type { User as FirebaseUser } from 'firebase/auth';
 import {
   fetchAppointments,
   fetchDailyReport,
@@ -36,6 +35,7 @@ import {
   syncAuthSession,
 } from './client/api';
 import {
+  type AuthSessionUser,
   getCurrentIdToken,
   signOutFirebase,
   subscribeToAuthState,
@@ -258,7 +258,7 @@ export default function App() {
 
   // Authentication & Multi-Clinic Session State
   const [authBooting, setAuthBooting] = useState(true);
-  const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
+  const [firebaseUser, setFirebaseUser] = useState<AuthSessionUser | null>(null);
   const [accountSession, setAccountSession] = useState<AccountSessionState | null>(null);
   const [authSyncError, setAuthSyncError] = useState<string | null>(null);
   const registrationMetaRef = useRef<{ fullName?: string; phoneNumber?: string }>({});
@@ -304,6 +304,7 @@ export default function App() {
   // Global Search State
   const [globalSearch, setGlobalSearch] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchResults, setSearchResults] = useState<{
     patients: Patient[];
@@ -345,7 +346,7 @@ export default function App() {
   );
 
   const synchronizeWithBackend = useCallback(
-    async (user: FirebaseUser, preferredClinicId?: string | null) => {
+    async (user: AuthSessionUser, preferredClinicId?: string | null) => {
       setAuthSyncError(null);
       const token = await user.getIdToken();
       setSessionToken(token);
@@ -591,6 +592,7 @@ export default function App() {
         await recordLogoutAudit();
       }
     } finally {
+      setToasts([]);
       setSessionToken(null);
       setActiveClinicId(null);
       writeStoredClinicId(null);
@@ -952,7 +954,7 @@ export default function App() {
         {/* 1. Floating Inset Forest-Green Pill Sidebar (Desktop) */}
         <aside
           aria-label="Primary Clinic Navigation"
-          className={`hidden lg:flex lg:flex-col lg:justify-between shrink-0 rounded-[32px] bg-[#0F3D2E] text-emerald-50 py-5 px-3 sticky top-5 h-[calc(100vh-5.5rem)] max-h-[880px] shadow-md transition-[width] duration-200 ${
+          className={`hidden lg:flex lg:flex-col lg:justify-between shrink-0 z-30 rounded-[32px] bg-[#0F3D2E] text-emerald-50 py-5 px-3 sticky top-5 h-[calc(100vh-5.5rem)] max-h-[880px] shadow-md transition-[width] duration-200 ${
             sidebarCollapsed ? 'w-[74px] items-center' : 'w-[208px] items-stretch'
           }`}
         >
@@ -1079,12 +1081,12 @@ export default function App() {
         {/* 2. Central Workspace + Conditional Right Rail */}
         <div className="flex-1 min-w-0 flex flex-col gap-5">
           {/* Lightweight Header (No heavy bar) */}
-          <header className="flex flex-wrap items-center justify-between gap-4 px-1 sm:px-2 pt-1">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="lg:hidden">
+          <header className="flex flex-wrap md:flex-nowrap items-center justify-between gap-3 md:gap-4 px-1 sm:px-2 pt-1">
+            <div className="flex items-center gap-3 min-w-0 flex-1">
+              <div className="lg:hidden shrink-0">
                 <CareDeskLogoMark className="w-9 h-9" />
               </div>
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-[#1C2B25] truncate">
                   {headerHeading}
                 </h1>
@@ -1095,8 +1097,23 @@ export default function App() {
             </div>
 
             <div className="flex items-center gap-2 sm:gap-2.5 shrink-0 flex-wrap">
-              {/* Search Pill */}
-              <div ref={searchContainerRef} className="relative hidden md:block w-48 lg:w-64">
+              {/* Mobile Search Toggle (< md) */}
+              <button
+                type="button"
+                onClick={() => setMobileSearchOpen((v) => !v)}
+                aria-label="Toggle global clinic search"
+                aria-expanded={mobileSearchOpen}
+                className={`md:hidden btn-press w-10 h-10 flex items-center justify-center border rounded-full transition-colors ${
+                  mobileSearchOpen
+                    ? 'bg-[#0F3D2E] border-[#0F3D2E] text-white'
+                    : 'bg-white border-[#DCE8E0] text-[#1C2B25] hover:bg-[#EEF3EF]'
+                }`}
+              >
+                <Search className="w-4 h-4" aria-hidden="true" />
+              </button>
+
+              {/* Search Pill (Desktop & Tablet) */}
+              <div ref={searchContainerRef} className="relative hidden md:block w-44 lg:w-52 xl:w-64">
                 <Search
                   className="w-3.5 h-3.5 text-[#6B7B73] absolute left-3.5 top-1/2 -translate-y-1/2"
                   aria-hidden="true"
@@ -1396,7 +1413,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => navigateToTab('profile')}
-                className={`hidden sm:inline-flex items-center gap-2 pl-1.5 pr-3 py-1 rounded-full border text-left transition-colors ${
+                className={`hidden sm:inline-flex items-center gap-2 p-1 xl:pl-1.5 xl:pr-3 rounded-full border text-left transition-colors ${
                   activeTab === 'profile'
                     ? 'bg-[#E3F7EF] border-[#34C38F] text-[#0F3D2E]'
                     : 'bg-white border-[#DCE8E0] hover:bg-[#EEF3EF] text-[#1C2B25]'
@@ -1419,13 +1436,131 @@ export default function App() {
                 <button
                   type="button"
                   onClick={handleQuickScheduleAppointment}
-                  className="btn-press px-4 py-2.5 text-xs sm:text-sm font-semibold text-white bg-[#34C38F] hover:bg-[#24B07D] rounded-full shadow-xs transition-colors whitespace-nowrap shrink-0"
+                  className="btn-press px-3.5 sm:px-4 py-2.5 text-xs sm:text-sm font-semibold text-white bg-[#34C38F] hover:bg-[#24B07D] rounded-full shadow-xs transition-colors whitespace-nowrap shrink-0"
                 >
                   + New Appointment
                 </button>
               )}
             </div>
           </header>
+
+          {/* Collapsible Mobile Search Bar (< md) */}
+          {mobileSearchOpen && (
+            <div className="md:hidden relative px-1 animate-view-enter">
+              <div className="relative">
+                <Search
+                  className="w-3.5 h-3.5 text-[#6B7B73] absolute left-3.5 top-1/2 -translate-y-1/2"
+                  aria-hidden="true"
+                />
+                <input
+                  id="mobile-global-search"
+                  type="search"
+                  value={globalSearch}
+                  onChange={(e) => setGlobalSearch(e.target.value)}
+                  placeholder="Search patient, staff, appointment ID..."
+                  aria-label="Mobile global clinic search"
+                  className="w-full pl-9 pr-9 py-2.5 text-xs bg-white border border-[#DCE8E0] rounded-full focus:outline-none focus:ring-2 focus:ring-[#34C38F]/25 focus:border-[#34C38F]"
+                />
+                {globalSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setGlobalSearch('')}
+                    aria-label="Clear mobile search"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[#6B7B73] hover:text-[#1C2B25]"
+                  >
+                    <X className="w-3.5 h-3.5" aria-hidden="true" />
+                  </button>
+                )}
+              </div>
+
+              {globalSearch.trim().length > 0 && (
+                <div className="mt-2 bg-white border border-[#DCE8E0] rounded-2xl shadow-lg overflow-hidden">
+                  <div className="px-4 py-2 border-b border-[#EEF3EF] bg-[#FAFBF9] text-[11px] font-semibold text-[#6B7B73] flex items-center justify-between">
+                    <span>Search Results ({activeClinic.id})</span>
+                    {searchLoading && <span>Searching...</span>}
+                  </div>
+                  {searchResults.patients.length === 0 &&
+                  searchResults.appointments.length === 0 &&
+                  searchResults.staff.length === 0 &&
+                  !searchLoading ? (
+                    <div className="px-4 py-4 text-xs text-[#6B7B73] text-center">
+                      No matching patients, staff, or appointments found.
+                    </div>
+                  ) : (
+                    <div className="max-h-64 overflow-y-auto divide-y divide-[#EEF3EF]">
+                      {searchResults.patients.map((pt) => (
+                        <button
+                          key={pt.id}
+                          type="button"
+                          onClick={() => {
+                            handleOpenPatientProfile(pt.id);
+                            setMobileSearchOpen(false);
+                            setGlobalSearch('');
+                          }}
+                          className="w-full text-left px-4 py-2.5 hover:bg-[#FAFBF9]"
+                        >
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="font-semibold text-[#1C2B25]">{pt.fullName}</span>
+                            <span className="font-mono text-[#137A55]">{pt.id}</span>
+                          </div>
+                          <div className="text-[11px] text-[#6B7B73] mt-0.5">
+                            Patient · {pt.administrativeStatus}
+                          </div>
+                        </button>
+                      ))}
+                      {searchResults.staff.map((stf) => (
+                        <button
+                          key={stf.id}
+                          type="button"
+                          onClick={() => {
+                            handleOpenStaffProfile(stf.id);
+                            setMobileSearchOpen(false);
+                            setGlobalSearch('');
+                          }}
+                          className="w-full text-left px-4 py-2.5 hover:bg-[#FAFBF9]"
+                        >
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="font-semibold text-[#1C2B25]">{stf.fullName}</span>
+                            <span className="font-mono text-[#0F3D2E]">{stf.id}</span>
+                          </div>
+                          <div className="text-[11px] text-[#6B7B73] mt-0.5">
+                            Staff ({stf.role}) · {stf.department}
+                          </div>
+                        </button>
+                      ))}
+                      {searchResults.appointments.map((apt) => (
+                        <button
+                          key={apt.id}
+                          type="button"
+                          onClick={() => {
+                            handleNavigateToFiltered({
+                              tab: 'appointments',
+                              date: apt.appointmentDate,
+                              status: 'All',
+                              appointmentId: apt.id,
+                            });
+                            setMobileSearchOpen(false);
+                            setGlobalSearch('');
+                          }}
+                          className="w-full text-left px-4 py-2.5 hover:bg-[#FAFBF9]"
+                        >
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="font-semibold text-[#1C2B25]">
+                              {apt.patientName ?? apt.patientId}
+                            </span>
+                            <span className="font-mono text-[#6B7B73]">{apt.id}</span>
+                          </div>
+                          <div className="text-[11px] text-[#6B7B73] mt-0.5 font-mono tabular-nums">
+                            {apt.appointmentDate} {apt.appointmentTime} · {apt.department}
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Inline Toasts */}
           {toasts.length > 0 && (
@@ -1466,10 +1601,10 @@ export default function App() {
           {/* Central Workspace + Conditional Right-Hand Rail (Dashboard & Appointments only) */}
           <div
             className={`flex-1 min-w-0 ${
-              showRightRail ? 'grid grid-cols-1 xl:grid-cols-12 gap-5 items-start' : ''
+              showRightRail ? 'flex flex-col xl:flex-row gap-5 items-start' : ''
             }`}
           >
-            <main className={showRightRail ? 'xl:col-span-8 min-w-0' : 'min-w-0'}>
+            <main className={showRightRail ? 'w-full xl:flex-1 min-w-0' : 'w-full min-w-0'}>
               <div
                 key={`${activeClinic.id}-${activeTab}-${routePatientId ?? ''}-${routeStaffId ?? ''}`}
                 className="animate-view-enter"
@@ -1632,7 +1767,7 @@ export default function App() {
             </main>
 
             {showRightRail && (
-              <div className="xl:col-span-4">
+              <div className="w-full xl:w-[300px] 2xl:w-[330px] shrink-0">
                 <RightRail
                   mode={activeTab === 'appointments' ? 'appointments' : 'dashboard'}
                   user={user}

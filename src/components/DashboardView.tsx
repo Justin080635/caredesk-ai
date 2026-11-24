@@ -329,7 +329,7 @@ export function DashboardView({
 
       {/* 2. 5 Compact KPI Cards with Pastel Icon Chips */}
       <section aria-label="Operational Key Metrics">
-        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-3.5">
+        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-3 2xl:gap-3.5">
           {/* Today's Appointments */}
           <button
             type="button"
@@ -337,21 +337,21 @@ export function DashboardView({
             onClick={() =>
               navigateTarget({ tab: 'appointments', date: activeDate, status: 'All' })
             }
-            className="btn-press card-surface card-interactive text-left rounded-[22px] p-4 sm:p-5 flex flex-col justify-between gap-3"
+            className="btn-press card-surface card-interactive text-left rounded-[22px] p-3.5 sm:p-4 2xl:p-5 flex flex-col justify-between gap-3 min-w-0"
           >
-            <div className="flex items-center justify-between gap-2 w-full">
-              <span className="text-[12.5px] font-medium text-[#6B7B73] leading-snug">
+            <div className="flex items-start justify-between gap-2 w-full min-w-0">
+              <span className="text-[12px] 2xl:text-[12.5px] font-medium text-[#6B7B73] leading-snug min-w-0">
                 {isViewingToday ? "Today's Appointments" : `Visits (${activeDate.slice(5)})`}
               </span>
-              <span className="w-9 h-9 rounded-2xl bg-[#E6F7EF] text-[#137A55] flex items-center justify-center shrink-0">
+              <span className="w-8 h-8 2xl:w-9 2xl:h-9 rounded-xl 2xl:rounded-2xl bg-[#E6F7EF] text-[#137A55] flex items-center justify-center shrink-0">
                 <CalendarIcon className="w-4 h-4" aria-hidden="true" />
               </span>
             </div>
             <div>
-              <div className="text-[30px] leading-none font-bold font-mono tabular-nums text-[#1C2B25]">
+              <div className="text-[28px] 2xl:text-[30px] leading-none font-bold font-mono tabular-nums text-[#1C2B25]">
                 {daily.totalAppointments}
               </div>
-              <div className="text-[11px] text-[#6B7B73] mt-1.5">
+              <div className="text-[11px] text-[#6B7B73] mt-1.5 truncate">
                 {daily.confirmedAppointments} confirmed
               </div>
             </div>
@@ -364,21 +364,21 @@ export function DashboardView({
             onClick={() =>
               navigateTarget({ tab: 'appointments', date: activeDate, status: 'Scheduled' })
             }
-            className="btn-press card-surface card-interactive text-left rounded-[22px] p-4 sm:p-5 flex flex-col justify-between gap-3"
+            className="btn-press card-surface card-interactive text-left rounded-[22px] p-3.5 sm:p-4 2xl:p-5 flex flex-col justify-between gap-3 min-w-0"
           >
-            <div className="flex items-center justify-between gap-2 w-full">
-              <span className="text-[12.5px] font-medium text-[#6B7B73] leading-snug">
+            <div className="flex items-start justify-between gap-2 w-full min-w-0">
+              <span className="text-[12px] 2xl:text-[12.5px] font-medium text-[#6B7B73] leading-snug min-w-0">
                 Unconfirmed
               </span>
-              <span className="w-9 h-9 rounded-2xl bg-[#FFF2E5] text-[#C26A1B] flex items-center justify-center shrink-0">
+              <span className="w-8 h-8 2xl:w-9 2xl:h-9 rounded-xl 2xl:rounded-2xl bg-[#FFF2E5] text-[#C26A1B] flex items-center justify-center shrink-0">
                 <Clock className="w-4 h-4" aria-hidden="true" />
               </span>
             </div>
             <div>
-              <div className="text-[30px] leading-none font-bold font-mono tabular-nums text-[#1C2B25]">
+              <div className="text-[28px] 2xl:text-[30px] leading-none font-bold font-mono tabular-nums text-[#1C2B25]">
                 {daily.unconfirmedAppointments}
               </div>
-              <div className="text-[11px] text-[#6B7B73] mt-1.5">Pending outreach</div>
+              <div className="text-[11px] text-[#6B7B73] mt-1.5 truncate">Pending outreach</div>
             </div>
           </button>
 
@@ -387,21 +387,21 @@ export function DashboardView({
             type="button"
             data-testid="kpi-missed-appointments"
             onClick={() => navigateTarget({ tab: 'appointments', status: 'Missed', date: '' })}
-            className="btn-press card-surface card-interactive text-left rounded-[22px] p-4 sm:p-5 flex flex-col justify-between gap-3"
+            className="btn-press card-surface card-interactive text-left rounded-[22px] p-3.5 sm:p-4 2xl:p-5 flex flex-col justify-between gap-3 min-w-0"
           >
-            <div className="flex items-center justify-between gap-2 w-full">
-              <span className="text-[12.5px] font-medium text-[#6B7B73] leading-snug">
+            <div className="flex items-start justify-between gap-2 w-full min-w-0">
+              <span className="text-[12px] 2xl:text-[12.5px] font-medium text-[#6B7B73] leading-snug min-w-0">
                 Missed (7 days)
               </span>
-              <span className="w-9 h-9 rounded-2xl bg-[#FFEAF0] text-[#BE123C] flex items-center justify-center shrink-0">
+              <span className="w-8 h-8 2xl:w-9 2xl:h-9 rounded-xl 2xl:rounded-2xl bg-[#FFEAF0] text-[#BE123C] flex items-center justify-center shrink-0">
                 <AlertCircle className="w-4 h-4" aria-hidden="true" />
               </span>
             </div>
             <div>
-              <div className="text-[30px] leading-none font-bold font-mono tabular-nums text-[#1C2B25]">
+              <div className="text-[28px] 2xl:text-[30px] leading-none font-bold font-mono tabular-nums text-[#1C2B25]">
                 {overview.missedLastSevenDaysCount}
               </div>
-              <div className="text-[11px] text-[#6B7B73] mt-1.5">Eligible to rebook</div>
+              <div className="text-[11px] text-[#6B7B73] mt-1.5 truncate">Eligible to rebook</div>
             </div>
           </button>
 
@@ -415,21 +415,21 @@ export function DashboardView({
                 followUpView: overview.overdueFollowUpsCount > 0 ? 'overdue' : 'pending',
               })
             }
-            className="btn-press card-surface card-interactive text-left rounded-[22px] p-4 sm:p-5 flex flex-col justify-between gap-3"
+            className="btn-press card-surface card-interactive text-left rounded-[22px] p-3.5 sm:p-4 2xl:p-5 flex flex-col justify-between gap-3 min-w-0"
           >
-            <div className="flex items-center justify-between gap-2 w-full">
-              <span className="text-[12.5px] font-medium text-[#6B7B73] leading-snug">
+            <div className="flex items-start justify-between gap-2 w-full min-w-0">
+              <span className="text-[12px] 2xl:text-[12.5px] font-medium text-[#6B7B73] leading-snug min-w-0">
                 Overdue Follow-ups
               </span>
-              <span className="w-9 h-9 rounded-2xl bg-[#F2ECFC] text-[#6D28D9] flex items-center justify-center shrink-0">
+              <span className="w-8 h-8 2xl:w-9 2xl:h-9 rounded-xl 2xl:rounded-2xl bg-[#F2ECFC] text-[#6D28D9] flex items-center justify-center shrink-0">
                 <ClipboardCheck className="w-4 h-4" aria-hidden="true" />
               </span>
             </div>
             <div>
-              <div className="text-[30px] leading-none font-bold font-mono tabular-nums text-[#1C2B25]">
+              <div className="text-[28px] 2xl:text-[30px] leading-none font-bold font-mono tabular-nums text-[#1C2B25]">
                 {overview.overdueFollowUpsCount}
               </div>
-              <div className="text-[11px] text-[#6B7B73] mt-1.5">
+              <div className="text-[11px] text-[#6B7B73] mt-1.5 truncate">
                 {overview.pendingFollowUpsCount} total open
               </div>
             </div>
@@ -440,21 +440,21 @@ export function DashboardView({
             type="button"
             data-testid="kpi-total-patients"
             onClick={() => navigateTarget({ tab: 'patients', status: 'All' })}
-            className="col-span-2 sm:col-span-1 btn-press card-surface card-interactive text-left rounded-[22px] p-4 sm:p-5 flex flex-col justify-between gap-3"
+            className="col-span-2 sm:col-span-1 btn-press card-surface card-interactive text-left rounded-[22px] p-3.5 sm:p-4 2xl:p-5 flex flex-col justify-between gap-3 min-w-0"
           >
-            <div className="flex items-center justify-between gap-2 w-full">
-              <span className="text-[12.5px] font-medium text-[#6B7B73] leading-snug">
+            <div className="flex items-start justify-between gap-2 w-full min-w-0">
+              <span className="text-[12px] 2xl:text-[12.5px] font-medium text-[#6B7B73] leading-snug min-w-0">
                 New Patients
               </span>
-              <span className="w-9 h-9 rounded-2xl bg-[#E7F3FD] text-[#0369A1] flex items-center justify-center shrink-0">
+              <span className="w-8 h-8 2xl:w-9 2xl:h-9 rounded-xl 2xl:rounded-2xl bg-[#E7F3FD] text-[#0369A1] flex items-center justify-center shrink-0">
                 <Users className="w-4 h-4" aria-hidden="true" />
               </span>
             </div>
             <div>
-              <div className="text-[30px] leading-none font-bold font-mono tabular-nums text-[#1C2B25]">
+              <div className="text-[28px] 2xl:text-[30px] leading-none font-bold font-mono tabular-nums text-[#1C2B25]">
                 {newPatientsCount}
               </div>
-              <div className="text-[11px] text-[#6B7B73] mt-1.5">
+              <div className="text-[11px] text-[#6B7B73] mt-1.5 truncate">
                 {newPatientsPeriodLabel} · {overview.totalPatients} total
               </div>
             </div>

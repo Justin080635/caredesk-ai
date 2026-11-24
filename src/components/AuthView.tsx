@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -10,14 +10,18 @@ import {
   Mail,
   Phone,
   ShieldCheck,
+  Sparkles,
   Stethoscope,
   User,
 } from 'lucide-react';
+import { fetchAuthConfig } from '../client/api';
 import {
+  type DemoPersona,
   formatFirebaseAuthError,
   isFirebaseClientConfigured,
   registerWithEmail,
   requestPasswordReset,
+  signInWithDemoPersona,
   signInWithEmail,
   signInWithGooglePopup,
 } from '../client/firebase';
@@ -82,12 +86,40 @@ export function AuthView({ onRegistrationMetadata }: AuthViewProps) {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [googleSubmitting, setGoogleSubmitting] = useState(false);
+  const [demoLoadingPersona, setDemoLoadingPersona] = useState<DemoPersona | null>(null);
+  const [demoAuthEnabled, setDemoAuthEnabled] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    fetchAuthConfig()
+      .then((cfg) => {
+        if (active) setDemoAuthEnabled(Boolean(cfg.demoAuthEnabled));
+      })
+      .catch(() => {
+        if (active) setDemoAuthEnabled(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const resetMessages = () => {
     setErrorMessage(null);
     setInfoMessage(null);
+  };
+
+  const handleDemoSignIn = async (persona: DemoPersona) => {
+    resetMessages();
+    setDemoLoadingPersona(persona);
+    try {
+      await signInWithDemoPersona(persona);
+    } catch (err) {
+      setErrorMessage(formatFirebaseAuthError(err));
+    } finally {
+      setDemoLoadingPersona(null);
+    }
   };
 
   const selectIntentRole = (role: OnboardingIntentRole) => {
@@ -579,7 +611,7 @@ export function AuthView({ onRegistrationMetadata }: AuthViewProps) {
 
               <button
                 type="submit"
-                disabled={submitting || googleSubmitting}
+                disabled={submitting || googleSubmitting || Boolean(demoLoadingPersona)}
                 className="btn-press w-full py-2.5 px-5 text-sm font-semibold text-white bg-[#34C38F] hover:bg-[#24B07D] rounded-full transition-colors disabled:opacity-60 whitespace-nowrap shrink-0 shadow-xs"
               >
                 {submitting
@@ -595,6 +627,53 @@ export function AuthView({ onRegistrationMetadata }: AuthViewProps) {
                       : 'Send Password Reset Email'}
               </button>
             </form>
+
+            {demoAuthEnabled && mode === 'signin' && (
+              <div className="pt-4 border-t border-[#EEF3EF] space-y-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-[#0F3D2E]">
+                    <Sparkles className="w-3.5 h-3.5 text-[#137A55]" aria-hidden="true" />
+                    Preview Demo Access
+                  </span>
+                  <span className="text-[10px] font-mono text-[#6B7B73]">Sandbox CLN-1001</span>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    disabled={submitting || googleSubmitting || Boolean(demoLoadingPersona)}
+                    onClick={() => handleDemoSignIn('administrator')}
+                    className="btn-press px-2.5 py-2 rounded-2xl border border-[#DCE8E0] bg-[#FAFBF9] hover:bg-[#E3F7EF]/60 hover:border-[#34C38F] text-left transition-colors disabled:opacity-60"
+                  >
+                    <div className="text-xs font-semibold text-[#0F3D2E]">
+                      {demoLoadingPersona === 'administrator' ? 'Loading...' : 'Admin'}
+                    </div>
+                    <div className="text-[10px] text-[#6B7B73] truncate">Dr. Maya Lin</div>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={submitting || googleSubmitting || Boolean(demoLoadingPersona)}
+                    onClick={() => handleDemoSignIn('doctor')}
+                    className="btn-press px-2.5 py-2 rounded-2xl border border-[#DCE8E0] bg-[#FAFBF9] hover:bg-[#E3F7EF]/60 hover:border-[#34C38F] text-left transition-colors disabled:opacity-60"
+                  >
+                    <div className="text-xs font-semibold text-[#0F3D2E]">
+                      {demoLoadingPersona === 'doctor' ? 'Loading...' : 'Doctor'}
+                    </div>
+                    <div className="text-[10px] text-[#6B7B73] truncate">Dr. Okafor</div>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={submitting || googleSubmitting || Boolean(demoLoadingPersona)}
+                    onClick={() => handleDemoSignIn('patient')}
+                    className="btn-press px-2.5 py-2 rounded-2xl border border-[#DCE8E0] bg-[#FAFBF9] hover:bg-[#E3F7EF]/60 hover:border-[#34C38F] text-left transition-colors disabled:opacity-60"
+                  >
+                    <div className="text-xs font-semibold text-[#0F3D2E]">
+                      {demoLoadingPersona === 'patient' ? 'Loading...' : 'Patient'}
+                    </div>
+                    <div className="text-[10px] text-[#6B7B73] truncate">Eleanor V.</div>
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </main>
       </div>

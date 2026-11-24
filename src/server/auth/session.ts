@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { NextFunction, Request, Response } from 'express';
@@ -35,32 +36,48 @@ export interface FirebasePublicConfig {
 }
 
 let cachedAdminApp: App | null = null;
-let cachedFirebaseProjectId: string | null | undefined;
+let cachedFirebaseConfig: { projectId: string | null; apiKey: string | null } | undefined;
 
-export function getFirebasePublicConfig(): FirebasePublicConfig {
-  if (cachedFirebaseProjectId !== undefined) {
-    return {
-      projectId: cachedFirebaseProjectId,
-      configured: Boolean(cachedFirebaseProjectId),
-    };
+function readFirebaseConfigFile(): { projectId: string | null; apiKey: string | null } {
+  if (cachedFirebaseConfig !== undefined) {
+    return cachedFirebaseConfig;
   }
 
   try {
     const configPath = path.resolve(process.cwd(), 'firebase-applet-config.json');
     if (fs.existsSync(configPath)) {
-      const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8')) as { projectId?: string };
+      const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8')) as {
+        projectId?: string;
+        apiKey?: string;
+      };
       const pid = parsed.projectId?.trim();
+      const apiKey = parsed.apiKey?.trim();
       if (pid && pid !== 'remixed-project-id') {
-        cachedFirebaseProjectId = pid;
-        return { projectId: pid, configured: true };
+        cachedFirebaseConfig = {
+          projectId: pid,
+          apiKey: apiKey || null,
+        };
+        return cachedFirebaseConfig;
       }
     }
   } catch {
     // Ignore malformed config file and fall back cleanly
   }
 
-  cachedFirebaseProjectId = null;
-  return { projectId: null, configured: false };
+  cachedFirebaseConfig = { projectId: null, apiKey: null };
+  return cachedFirebaseConfig;
+}
+
+export function getFirebasePublicConfig(): FirebasePublicConfig {
+  const { projectId } = readFirebaseConfigFile();
+  return {
+    projectId,
+    configured: Boolean(projectId),
+  };
+}
+
+export function getFirebaseWebApiKey(): string | null {
+  return readFirebaseConfigFile().apiKey;
 }
 
 function getFirebaseAdminApp(): App | null {
@@ -96,6 +113,321 @@ export async function verifyFirebaseIdToken(
   } catch {
     return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Option 3: Signed Sandbox Demo Auth (Strictly Non-Production / Opt-In)
+// ---------------------------------------------------------------------------
+
+export type DemoPersonaKey = 'administrator' | 'doctor' | 'patient';
+
+export interface DemoPersonaSpec {
+  key: DemoPersonaKey;
+  uid: string;
+  email: string;
+  name: string;
+  role: AccountRole;
+  linkedPatientId?: string;
+}
+
+export const DEMO_PERSONAS: Record<DemoPersonaKey, DemoPersonaSpec> = {
+  administrator: {
+    key: 'administrator',
+    uid: 'demo-sandbox-admin',
+    email: 'demo.admin@caredesk.example.org',
+    name: 'Dr. Maya Lin',
+    role: 'Clinic Administrator',
+  },
+  doctor: {
+    key: 'doctor',
+    uid: 'demo-sandbox-doctor',
+    email: 'samuel.okafor@caredesk.example.org',
+    name: 'Dr. Samuel Okafor',
+    role: 'Doctor',
+  },
+  patient: {
+    key: 'patient',
+    uid: 'demo-sandbox-patient',
+    email: 'eleanor.vance@example.org',
+    name: 'Eleanor Vance',
+    role: 'Patient',
+    linkedPatientId: 'P-1025',
+  },
+};
+
+const DEMO_SIGNING_SECRET =
+  process.env.CAREDESK_DEMO_SIGNING_SECRET?.trim() || crypto.randomBytes(32).toString('hex');
+
+export function isDemoAuthEnabled(): boolean {
+  const flag = process.env.CAREDESK_ENABLE_DEMO_AUTH?.trim().toLowerCase();
+  if (flag === 'false' || flag === '0') return false;
+  if (flag === 'true' || flag === '1') return true;
+  return process.env.NODE_ENV !== 'production';
+}
+
+export function createDemoSessionToken(persona: DemoPersonaKey): {
+  token: string;
+  expiresIn: number;
+  identity: VerifiedFirebaseIdentity;
+} {
+  const spec = DEMO_PERSONAS[persona];
+  const expiresIn = 8 * 60 * 60; // 8 hours
+  const exp = Math.floor(Date.now() / 1000) + expiresIn;
+  const payloadObj = {
+    persona: spec.key,
+    uid: spec.uid,
+    email: spec.email,
+    name: spec.name,
+    exp,
+  };
+  const payloadB64 = Buffer.from(JSON.stringify(payloadObj), 'utf8').toString('base64url');
+  const sigB64 = crypto
+    .createHmac('sha256', DEMO_SIGNING_SECRET)
+    .update(payloadB64)
+    .digest('base64url');
+
+  return {
+    token: `cd_demo.${payloadB64}.${sigB64}`,
+    expiresIn,
+    identity: {
+      uid: spec.uid,
+      email: spec.email,
+      name: spec.name,
+      provider: 'demo-sandbox',
+      emailVerified: true,
+    },
+  };
+}
+
+export function verifyDemoSessionToken(token: string): VerifiedFirebaseIdentity | null {
+  if (!isDemoAuthEnabled() || !token.startsWith('cd_demo.')) return null;
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;
+  const [, payloadB64, sigB64] = parts;
+  if (!payloadB64 || !sigB64) return null;
+
+  const expectedSigB64 = crypto
+    .createHmac('sha256', DEMO_SIGNING_SECRET)
+    .update(payloadB64)
+    .digest('base64url');
+
+  const actualBuf = Buffer.from(sigB64, 'utf8');
+  const expectedBuf = Buffer.from(expectedSigB64, 'utf8');
+  if (actualBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(actualBuf, expectedBuf)) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8')) as {
+      persona?: DemoPersonaKey;
+      uid?: string;
+      email?: string;
+      name?: string;
+      exp?: number;
+    };
+    if (!parsed.persona || !(parsed.persona in DEMO_PERSONAS)) return null;
+    if (typeof parsed.exp !== 'number' || parsed.exp <= Math.floor(Date.now() / 1000)) {
+      return null;
+    }
+    const spec = DEMO_PERSONAS[parsed.persona];
+    return {
+      uid: spec.uid,
+      email: spec.email,
+      name: spec.name,
+      provider: 'demo-sandbox',
+      emailVerified: true,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function verifySessionToken(
+  token: string
+): Promise<VerifiedFirebaseIdentity | null> {
+  if (!token) return null;
+  if (token.startsWith('cd_demo.')) {
+    return verifyDemoSessionToken(token);
+  }
+  return verifyFirebaseIdToken(token);
+}
+
+// ---------------------------------------------------------------------------
+// Option 1: Same-Origin Firebase Identity Toolkit Proxy Helpers
+// ---------------------------------------------------------------------------
+
+export class FirebaseProxyError extends Error {
+  statusCode: number;
+  firebaseCode: string;
+
+  constructor(statusCode: number, firebaseCode: string, message: string) {
+    super(message);
+    this.statusCode = statusCode;
+    this.firebaseCode = firebaseCode;
+  }
+}
+
+const IDENTITY_REST_ERROR_MAP: Record<string, { status: number; code: string; message: string }> = {
+  INVALID_LOGIN_CREDENTIALS: {
+    status: 401,
+    code: 'auth/invalid-credential',
+    message: 'Incorrect email address or password.',
+  },
+  INVALID_PASSWORD: {
+    status: 401,
+    code: 'auth/invalid-credential',
+    message: 'Incorrect email address or password.',
+  },
+  EMAIL_NOT_FOUND: {
+    status: 401,
+    code: 'auth/user-not-found',
+    message: 'No account matches this email address.',
+  },
+  EMAIL_EXISTS: {
+    status: 409,
+    code: 'auth/email-already-in-use',
+    message: 'An account with this email address already exists.',
+  },
+  INVALID_EMAIL: {
+    status: 400,
+    code: 'auth/invalid-email',
+    message: 'Please enter a valid email address.',
+  },
+  WEAK_PASSWORD: {
+    status: 400,
+    code: 'auth/weak-password',
+    message: 'Password must be at least 6 characters.',
+  },
+  OPERATION_NOT_ALLOWED: {
+    status: 403,
+    code: 'auth/operation-not-allowed',
+    message: 'Email/password sign-in is not enabled in Firebase Authentication.',
+  },
+  TOO_MANY_ATTEMPTS_TRY_LATER: {
+    status: 429,
+    code: 'auth/too-many-requests',
+    message: 'Too many authentication attempts. Please wait a few minutes and try again.',
+  },
+  USER_DISABLED: {
+    status: 403,
+    code: 'auth/user-disabled',
+    message: 'This account has been disabled.',
+  },
+  TOKEN_EXPIRED: {
+    status: 401,
+    code: 'auth/id-token-expired',
+    message: 'Session token expired. Please sign in again.',
+  },
+  INVALID_ID_TOKEN: {
+    status: 401,
+    code: 'auth/invalid-user-token',
+    message: 'Session token is invalid. Please sign in again.',
+  },
+};
+
+export async function callFirebaseIdentityEndpoint<T extends Record<string, unknown>>(
+  endpoint:
+    | 'accounts:signInWithPassword'
+    | 'accounts:signUp'
+    | 'accounts:update'
+    | 'accounts:sendOobCode',
+  payload: Record<string, unknown>
+): Promise<T> {
+  const apiKey = getFirebaseWebApiKey();
+  if (!apiKey) {
+    throw new FirebaseProxyError(
+      503,
+      'auth/configuration-not-found',
+      'Firebase authentication configuration is missing on the server.'
+    );
+  }
+
+  const url = `https://identitytoolkit.googleapis.com/v1/${endpoint}?key=${encodeURIComponent(apiKey)}`;
+  let response: globalThis.Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch {
+    throw new FirebaseProxyError(
+      502,
+      'auth/network-request-failed',
+      'Could not reach Firebase Authentication service from the server. Please try again.'
+    );
+  }
+
+  const data = (await response.json().catch(() => ({}))) as Record<string, unknown> & {
+    error?: { message?: string };
+  };
+
+  if (!response.ok) {
+    const rawMsg = String(data.error?.message ?? 'UNKNOWN_ERROR');
+    const baseCode = rawMsg.split(':')[0].trim().split(' ')[0].trim();
+    const mapped = IDENTITY_REST_ERROR_MAP[baseCode];
+    if (mapped) {
+      throw new FirebaseProxyError(mapped.status, mapped.code, mapped.message);
+    }
+    throw new FirebaseProxyError(400, `auth/${baseCode.toLowerCase().replace(/_/g, '-')}`, rawMsg);
+  }
+
+  return data as T;
+}
+
+export async function callFirebaseSecureTokenRefresh(refreshToken: string): Promise<{
+  idToken: string;
+  refreshToken: string;
+  expiresIn: number;
+  uid: string;
+}> {
+  const apiKey = getFirebaseWebApiKey();
+  if (!apiKey) {
+    throw new FirebaseProxyError(
+      503,
+      'auth/configuration-not-found',
+      'Firebase authentication configuration is missing on the server.'
+    );
+  }
+
+  const url = `https://securetoken.googleapis.com/v1/token?key=${encodeURIComponent(apiKey)}`;
+  const body = new URLSearchParams({
+    grant_type: 'refresh_token',
+    refresh_token: refreshToken,
+  });
+
+  let response: globalThis.Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch {
+    throw new FirebaseProxyError(
+      502,
+      'auth/network-request-failed',
+      'Could not refresh Firebase session cleanly. Please sign in again.'
+    );
+  }
+
+  const data = (await response.json().catch(() => ({}))) as Record<string, unknown> & {
+    error?: { message?: string };
+  };
+
+  if (!response.ok || typeof data.id_token !== 'string') {
+    const rawMsg = String(data.error?.message ?? 'INVALID_REFRESH_TOKEN');
+    throw new FirebaseProxyError(401, 'auth/invalid-user-token', rawMsg);
+  }
+
+  return {
+    idToken: data.id_token,
+    refreshToken: typeof data.refresh_token === 'string' ? data.refresh_token : refreshToken,
+    expiresIn: Number(data.expires_in ?? 3600) || 3600,
+    uid: String(data.user_id ?? ''),
+  };
 }
 
 export function getPermissionsForRole(role: AccountRole): RolePermissions {
@@ -207,7 +539,7 @@ function extractBearerToken(req: Request): string | null {
 }
 
 export function createAuthGuards(db: DatabaseSync, customVerifier?: TokenVerifier) {
-  const verifier = customVerifier ?? verifyFirebaseIdToken;
+  const verifier = customVerifier ?? verifySessionToken;
 
   const requireAuthenticatedUser = async (
     req: AuthenticatedRequest,

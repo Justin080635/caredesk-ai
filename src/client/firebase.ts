@@ -1,13 +1,10 @@
 import { getApp, getApps, initializeApp, type FirebaseApp } from 'firebase/app';
 import {
-  createUserWithEmailAndPassword,
   EmailAuthProvider,
   getAuth,
   GoogleAuthProvider,
   onAuthStateChanged,
   reauthenticateWithCredential,
-  sendPasswordResetEmail,
-  signInWithEmailAndPassword,
   signInWithPopup,
   signOut,
   updatePassword,
@@ -16,6 +13,37 @@ import {
   type User,
 } from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
+
+export interface AuthSessionUser {
+  uid: string;
+  email: string | null;
+  displayName: string | null;
+  photoURL?: string | null;
+  providerId?: string;
+  isProxySession?: boolean;
+  isDemoSession?: boolean;
+  getIdToken: (forceRefresh?: boolean) => Promise<string>;
+}
+
+export type DemoPersona = 'administrator' | 'doctor' | 'patient';
+
+interface CustomInMemorySession {
+  kind: 'proxy' | 'demo';
+  idToken: string;
+  refreshToken?: string;
+  expiresAt: number;
+  user: AuthSessionUser;
+}
+
+class ClientFirebaseAuthError extends Error {
+  code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = 'FirebaseError';
+    this.code = code;
+  }
+}
 
 function isConfigReady(): boolean {
   return Boolean(
@@ -40,66 +68,289 @@ export const firebaseAuth = authInstance;
 const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
 
-export function subscribeToAuthState(callback: (user: User | null) => void): () => void {
-  if (!authInstance) {
-    callback(null);
-    return () => {};
+// Held strictly in JS memory (never stored in localStorage or sessionStorage)
+let activeCustomSession: CustomInMemorySession | null = null;
+let lastNativeFirebaseUser: User | null = null;
+const authListeners = new Set<(user: AuthSessionUser | null) => void>();
+
+function notifyAuthListeners(): void {
+  const effectiveUser: AuthSessionUser | null = activeCustomSession
+    ? activeCustomSession.user
+    : lastNativeFirebaseUser;
+  for (const listener of authListeners) {
+    listener(effectiveUser);
   }
-  return onAuthStateChanged(authInstance, callback);
+}
+
+function createCustomSessionUser(params: {
+  uid: string;
+  email: string;
+  displayName: string;
+  providerId: string;
+  isProxySession: boolean;
+  isDemoSession: boolean;
+}): AuthSessionUser {
+  return {
+    uid: params.uid,
+    email: params.email || null,
+    displayName: params.displayName || null,
+    photoURL: null,
+    providerId: params.providerId,
+    isProxySession: params.isProxySession,
+    isDemoSession: params.isDemoSession,
+    getIdToken: async (forceRefresh = false) => {
+      const token = await getCurrentIdToken(forceRefresh);
+      if (!token) {
+        throw new Error('Authentication session expired. Please sign in again.');
+      }
+      return token;
+    },
+  };
+}
+
+async function callProxyAuthEndpoint<T>(
+  path: string,
+  payload: Record<string, unknown>,
+  bearerToken?: string
+): Promise<T> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (bearerToken) {
+    headers.Authorization = `Bearer ${bearerToken}`;
+  }
+  const response = await fetch(path, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload),
+  });
+  const parsed = (await response.json().catch(() => ({}))) as {
+    data?: T;
+    error?: { code?: string; message?: string };
+  };
+  if (!response.ok || !parsed.data) {
+    const code = parsed.error?.code ?? 'auth/internal-error';
+    const message = parsed.error?.message ?? 'Authentication request failed.';
+    throw new ClientFirebaseAuthError(code, message);
+  }
+  return parsed.data;
+}
+
+export function subscribeToAuthState(callback: (user: AuthSessionUser | null) => void): () => void {
+  authListeners.add(callback);
+
+  let firebaseReady = !authInstance;
+  let unsubscribeNative = () => {};
+
+  if (authInstance) {
+    unsubscribeNative = onAuthStateChanged(authInstance, (fbUser) => {
+      firebaseReady = true;
+      lastNativeFirebaseUser = fbUser;
+      if (fbUser && activeCustomSession) {
+        activeCustomSession = null;
+      }
+      callback(activeCustomSession ? activeCustomSession.user : fbUser);
+    });
+  } else {
+    callback(activeCustomSession ? activeCustomSession.user : null);
+  }
+
+  if (firebaseReady && authInstance) {
+    callback(activeCustomSession ? activeCustomSession.user : lastNativeFirebaseUser);
+  }
+
+  return () => {
+    authListeners.delete(callback);
+    unsubscribeNative();
+  };
 }
 
 export async function getCurrentIdToken(forceRefresh = false): Promise<string | null> {
+  if (activeCustomSession) {
+    if (
+      activeCustomSession.kind === 'proxy' &&
+      activeCustomSession.refreshToken &&
+      (forceRefresh || Date.now() >= activeCustomSession.expiresAt - 120_000)
+    ) {
+      try {
+        const refreshed = await callProxyAuthEndpoint<{
+          idToken: string;
+          refreshToken: string;
+          expiresIn: number;
+        }>('/api/auth/email-refresh', {
+          refreshToken: activeCustomSession.refreshToken,
+        });
+        activeCustomSession.idToken = refreshed.idToken;
+        activeCustomSession.refreshToken = refreshed.refreshToken;
+        activeCustomSession.expiresAt = Date.now() + (refreshed.expiresIn || 3600) * 1000;
+      } catch {
+        // Fall through to current token if still valid, or fail cleanly on expired
+      }
+    }
+    return activeCustomSession.idToken;
+  }
+
   if (!authInstance?.currentUser) return null;
   return authInstance.currentUser.getIdToken(forceRefresh);
 }
 
-export async function signInWithGooglePopup(): Promise<User> {
+export async function signInWithGooglePopup(): Promise<AuthSessionUser> {
   if (!authInstance) {
     throw new Error('Firebase authentication is not configured.');
   }
   const result = await signInWithPopup(authInstance, googleProvider);
+  activeCustomSession = null;
+  lastNativeFirebaseUser = result.user;
+  notifyAuthListeners();
   return result.user;
 }
 
-export async function signInWithEmail(email: string, password: string): Promise<User> {
-  if (!authInstance) {
-    throw new Error('Firebase authentication is not configured.');
+export async function signInWithEmail(email: string, password: string): Promise<AuthSessionUser> {
+  const data = await callProxyAuthEndpoint<{
+    idToken: string;
+    refreshToken: string;
+    expiresIn: number;
+    uid: string;
+    email: string;
+    displayName: string;
+  }>('/api/auth/email-signin', {
+    email: email.trim(),
+    password,
+  });
+
+  if (authInstance?.currentUser) {
+    await signOut(authInstance).catch(() => {});
   }
-  const result = await signInWithEmailAndPassword(authInstance, email.trim(), password);
-  return result.user;
+
+  const user = createCustomSessionUser({
+    uid: data.uid,
+    email: data.email,
+    displayName: data.displayName,
+    providerId: 'password',
+    isProxySession: true,
+    isDemoSession: false,
+  });
+
+  activeCustomSession = {
+    kind: 'proxy',
+    idToken: data.idToken,
+    refreshToken: data.refreshToken,
+    expiresAt: Date.now() + (data.expiresIn || 3600) * 1000,
+    user,
+  };
+  notifyAuthListeners();
+  return user;
 }
 
 export async function registerWithEmail(params: {
   fullName: string;
   email: string;
   password: string;
-}): Promise<User> {
-  if (!authInstance) {
-    throw new Error('Firebase authentication is not configured.');
+}): Promise<AuthSessionUser> {
+  const data = await callProxyAuthEndpoint<{
+    idToken: string;
+    refreshToken: string;
+    expiresIn: number;
+    uid: string;
+    email: string;
+    displayName: string;
+  }>('/api/auth/email-register', {
+    fullName: params.fullName.trim(),
+    email: params.email.trim(),
+    password: params.password,
+  });
+
+  if (authInstance?.currentUser) {
+    await signOut(authInstance).catch(() => {});
   }
-  const result = await createUserWithEmailAndPassword(
-    authInstance,
-    params.email.trim(),
-    params.password
-  );
-  if (params.fullName.trim()) {
-    await updateProfile(result.user, { displayName: params.fullName.trim() });
-    await result.user.getIdToken(true);
+
+  const user = createCustomSessionUser({
+    uid: data.uid,
+    email: data.email,
+    displayName: data.displayName || params.fullName.trim(),
+    providerId: 'password',
+    isProxySession: true,
+    isDemoSession: false,
+  });
+
+  activeCustomSession = {
+    kind: 'proxy',
+    idToken: data.idToken,
+    refreshToken: data.refreshToken,
+    expiresAt: Date.now() + (data.expiresIn || 3600) * 1000,
+    user,
+  };
+  notifyAuthListeners();
+  return user;
+}
+
+export async function signInWithDemoPersona(persona: DemoPersona): Promise<AuthSessionUser> {
+  const data = await callProxyAuthEndpoint<{
+    token: string;
+    expiresIn: number;
+    persona: DemoPersona;
+    user: {
+      uid: string;
+      email: string;
+      displayName: string;
+      providerId: string;
+    };
+  }>('/api/auth/demo-signin', { persona });
+
+  if (authInstance?.currentUser) {
+    await signOut(authInstance).catch(() => {});
   }
-  return result.user;
+
+  const user = createCustomSessionUser({
+    uid: data.user.uid,
+    email: data.user.email,
+    displayName: data.user.displayName,
+    providerId: 'demo-sandbox',
+    isProxySession: false,
+    isDemoSession: true,
+  });
+
+  activeCustomSession = {
+    kind: 'demo',
+    idToken: data.token,
+    expiresAt: Date.now() + (data.expiresIn || 28800) * 1000,
+    user,
+  };
+  notifyAuthListeners();
+  return user;
 }
 
 export async function requestPasswordReset(email: string): Promise<void> {
-  if (!authInstance) {
-    throw new Error('Firebase authentication is not configured.');
-  }
-  await sendPasswordResetEmail(authInstance, email.trim());
+  await callProxyAuthEndpoint('/api/auth/email-reset', {
+    email: email.trim(),
+  });
 }
 
 export async function changeUserPassword(
   currentPassword: string,
   newPassword: string
 ): Promise<void> {
+  if (activeCustomSession) {
+    if (activeCustomSession.kind === 'demo') {
+      throw new Error('Preview demo accounts do not use a personal password.');
+    }
+    const token = await getCurrentIdToken();
+    if (!token) {
+      throw new Error('No active authenticated user session.');
+    }
+    const updated = await callProxyAuthEndpoint<{
+      idToken: string;
+      refreshToken: string;
+      expiresIn: number;
+    }>('/api/auth/email-password', { currentPassword, newPassword }, token);
+    if (updated.idToken) {
+      activeCustomSession.idToken = updated.idToken;
+      activeCustomSession.refreshToken = updated.refreshToken || activeCustomSession.refreshToken;
+      activeCustomSession.expiresAt = Date.now() + (updated.expiresIn || 3600) * 1000;
+    }
+    return;
+  }
+
   if (!authInstance?.currentUser) {
     throw new Error('No active authenticated user session.');
   }
@@ -113,27 +364,60 @@ export async function changeUserPassword(
 }
 
 export async function updateFirebaseDisplayName(fullName: string): Promise<void> {
-  if (!authInstance?.currentUser) return;
   const trimmed = fullName.trim();
-  if (!trimmed || authInstance.currentUser.displayName === trimmed) return;
+  if (!trimmed) return;
+
+  if (activeCustomSession) {
+    if (activeCustomSession.kind === 'proxy') {
+      const token = await getCurrentIdToken();
+      if (token) {
+        const updated = await callProxyAuthEndpoint<{
+          idToken?: string;
+          refreshToken?: string;
+          expiresIn?: number;
+        }>('/api/auth/email-profile', { fullName: trimmed }, token);
+        if (updated.idToken) {
+          activeCustomSession.idToken = updated.idToken;
+          activeCustomSession.refreshToken =
+            updated.refreshToken || activeCustomSession.refreshToken;
+          activeCustomSession.expiresAt = Date.now() + (updated.expiresIn || 3600) * 1000;
+        }
+      }
+    }
+    activeCustomSession.user = {
+      ...activeCustomSession.user,
+      displayName: trimmed,
+    };
+    notifyAuthListeners();
+    return;
+  }
+
+  if (!authInstance?.currentUser) return;
+  if (authInstance.currentUser.displayName === trimmed) return;
   await updateProfile(authInstance.currentUser, { displayName: trimmed });
 }
 
 export async function signOutFirebase(): Promise<void> {
-  if (!authInstance) return;
-  await signOut(authInstance);
+  activeCustomSession = null;
+  lastNativeFirebaseUser = null;
+  if (authInstance) {
+    await signOut(authInstance).catch(() => {});
+  }
+  notifyAuthListeners();
 }
 
 export function formatFirebaseAuthError(err: unknown): string {
   if (err && typeof err === 'object' && 'code' in err) {
     const code = String((err as { code?: unknown }).code);
     switch (code) {
+      case 'auth/network-request-failed':
+        return 'Browser could not reach Google Sign-In directly (often blocked inside preview iframes or by privacy shields). Use Email & Password sign-in above or Preview Demo Access below.';
       case 'auth/operation-not-allowed':
-        return 'Email/password sign-in is not yet enabled in Firebase Console (Authentication -> Sign-in method -> Email/Password). You can use Continue with Google immediately or enable Email/Password in Firebase Console.';
+        return 'Email/password sign-in is not yet enabled in Firebase Console (Authentication -> Sign-in method -> Email/Password). Use Preview Demo Access or enable Email/Password.';
       case 'auth/popup-closed-by-user':
         return 'Google sign-in popup was closed before completing authentication.';
       case 'auth/popup-blocked':
-        return 'Sign-in popup was blocked by your browser. Allow popups for this site and try again.';
+        return 'Sign-in popup was blocked by your browser. Allow popups for this site or use Email & Password sign-in.';
       case 'auth/unauthorized-domain':
         return 'This preview domain is not listed under Firebase Authentication -> Settings -> Authorized domains.';
       case 'auth/invalid-credential':

@@ -109,7 +109,7 @@ export function RightRail({
   return (
     <aside
       aria-label={mode === 'dashboard' ? 'Operations Side Rail' : 'Selected Day Inspector'}
-      className="w-full xl:w-[320px] 2xl:w-[340px] shrink-0 space-y-4"
+      className="w-full space-y-4"
     >
       {/* 1. Profile Card */}
       <div className="card-surface rounded-[22px] p-4 space-y-3">

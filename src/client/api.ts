@@ -134,6 +134,7 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
 export interface AuthConfigInfo {
   firebaseConfigured: boolean;
   projectId: string | null;
+  demoAuthEnabled?: boolean;
   providers: {
     google: boolean;
     emailPassword: boolean;

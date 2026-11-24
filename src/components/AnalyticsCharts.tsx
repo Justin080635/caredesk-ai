@@ -130,19 +130,19 @@ export function DualSeriesAreaChart({
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="min-w-0">
           <h3 className="text-base font-bold text-[#1C2B25] tracking-tight">
             Patient Visit Activity
           </h3>
-          <p className="text-xs text-[#6B7B73] mt-0.5">
+          <p className="text-xs text-[#6B7B73] mt-0.5 truncate">
             Scheduled volume vs confirmed &amp; completed visits · Hover or click a day to inspect
           </p>
         </div>
 
         {/* Segmented Filter Pills (All / New / Follow-up) */}
         <div
-          className="inline-flex items-center gap-1 p-1 bg-[#EEF3EF] border border-[#DCE8E0] rounded-full"
+          className="inline-flex items-center gap-1 p-1 bg-[#EEF3EF] border border-[#DCE8E0] rounded-full shrink-0 w-fit"
           role="group"
           aria-label="Filter patient activity by appointment type"
         >
@@ -164,37 +164,37 @@ export function DualSeriesAreaChart({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-12 gap-5 items-center">
+      <div className="grid grid-cols-1 md:grid-cols-12 gap-4 2xl:gap-5 items-center">
         {/* Left: Two Small Stat Tiles with % Change Badges */}
         <div className="md:col-span-4 grid grid-cols-2 md:grid-cols-1 gap-3">
-          <div className="p-4 rounded-[20px] bg-[#FAFBF9] border border-[#DCE8E0] space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-[#6B7B73]">
-                <span className="w-2.5 h-2.5 rounded-full bg-[#0F3D2E]" aria-hidden="true" />
+          <div className="p-3.5 2xl:p-4 rounded-[20px] bg-[#FAFBF9] border border-[#DCE8E0] space-y-1.5">
+            <div className="flex items-center justify-between gap-1.5">
+              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-[#6B7B73] truncate">
+                <span className="w-2.5 h-2.5 rounded-full bg-[#0F3D2E] shrink-0" aria-hidden="true" />
                 Total Visits
               </span>
               {renderDeltaBadge(summary.primaryDeltaPct)}
             </div>
-            <div className="text-[28px] leading-none font-bold font-mono tabular-nums text-[#1C2B25]">
+            <div className="text-[26px] 2xl:text-[28px] leading-none font-bold font-mono tabular-nums text-[#1C2B25]">
               {summary.totalPrimary}
             </div>
-            <p className="text-[11px] text-[#6B7B73]">
+            <p className="text-[11px] text-[#6B7B73] truncate">
               {filter === 'All' ? 'All clinic appointments' : `${filter} appointments in window`}
             </p>
           </div>
 
-          <div className="p-4 rounded-[20px] bg-[#F2F8F4] border border-[#DCE8E0] space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-[#6B7B73]">
-                <span className="w-2.5 h-2.5 rounded-full bg-[#34C38F]" aria-hidden="true" />
+          <div className="p-3.5 2xl:p-4 rounded-[20px] bg-[#F2F8F4] border border-[#DCE8E0] space-y-1.5">
+            <div className="flex items-center justify-between gap-1.5">
+              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-[#6B7B73] truncate">
+                <span className="w-2.5 h-2.5 rounded-full bg-[#34C38F] shrink-0" aria-hidden="true" />
                 Confirmed &amp; Done
               </span>
               {renderDeltaBadge(summary.secondaryDeltaPct)}
             </div>
-            <div className="text-[28px] leading-none font-bold font-mono tabular-nums text-[#0F3D2E]">
+            <div className="text-[26px] 2xl:text-[28px] leading-none font-bold font-mono tabular-nums text-[#0F3D2E]">
               {summary.totalSecondary}
             </div>
-            <p className="text-[11px] text-[#137A55] font-medium">
+            <p className="text-[11px] text-[#137A55] font-medium truncate">
               {summary.confirmationRatePct}% fulfillment rate
             </p>
           </div>
