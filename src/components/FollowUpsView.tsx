@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, ClipboardList, Pencil, Plus, X } from 'lucide-react';
+import { AlertTriangle, Pencil, Plus, X } from 'lucide-react';
 import {
   createFollowupRecord,
   fetchFollowups,
@@ -12,6 +12,8 @@ import type {
   FollowUpTask,
   Patient,
 } from '../shared/types';
+import { ClinicEmptyIllustration, EditorialAvatar } from './ClinicIllustrations';
+import { ModalShell } from './ModalShell';
 import { FollowUpStatusText, PriorityText } from './StatusText';
 
 interface FollowUpsViewProps {
@@ -34,6 +36,7 @@ export function FollowUpsView({
   compactDensity = false,
 }: FollowUpsViewProps) {
   const [tasks, setTasks] = useState<FollowUpTask[]>([]);
+  const [allTasksSnapshot, setAllTasksSnapshot] = useState<FollowUpTask[]>([]);
   const [patients, setPatients] = useState<Patient[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'pending' | 'overdue' | 'Completed' | 'all'>(
@@ -79,13 +82,14 @@ export function FollowUpsView({
   const loadTasks = useCallback(async () => {
     setLoading(true);
     try {
-      const [taskList, patientList] = await Promise.all([
+      const [taskList, allSnapshot, patientList] = await Promise.all([
         viewMode === 'pending' || viewMode === 'overdue'
           ? fetchFollowups({ pendingOnly: true })
           : fetchFollowups({
               status: viewMode === 'all' ? undefined : viewMode,
               priority: priorityFilter,
             }),
+        fetchFollowups(),
         fetchPatients(),
       ]);
 
@@ -97,6 +101,7 @@ export function FollowUpsView({
         filtered = filtered.filter((t) => t.priority === priorityFilter);
       }
       setTasks(filtered);
+      setAllTasksSnapshot(allSnapshot);
       setPatients(patientList);
     } catch (err) {
       onErrorNotice(err instanceof Error ? err.message : 'Unable to load follow-up tasks.');
@@ -213,13 +218,84 @@ export function FollowUpsView({
 
   const cellPad = compactDensity ? 'py-2 px-4' : 'py-3 px-4';
 
+  const openQueueCount = allTasksSnapshot.filter(
+    (t) => t.status === 'Pending' || t.status === 'In Progress'
+  ).length;
+  const overdueQueueCount = allTasksSnapshot.filter(
+    (t) => (t.status === 'Pending' || t.status === 'In Progress') && t.dueDate < todayKey
+  ).length;
+  const highPriorityOpenCount = allTasksSnapshot.filter(
+    (t) => (t.status === 'Pending' || t.status === 'In Progress') && t.priority === 'High'
+  ).length;
+  const completedCount = allTasksSnapshot.filter((t) => t.status === 'Completed').length;
+
   return (
     <div className="space-y-5">
+      {/* Follow-up Queue Summary Bar */}
+      <section className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <button
+          type="button"
+          onClick={() => setViewMode('pending')}
+          className="text-left bg-[#0B261C] hover:bg-[#12382A] text-white rounded-xl p-4 transition-colors btn-press"
+        >
+          <div className="text-xs font-medium text-emerald-200/85">Open Queue</div>
+          <div className="text-2xl font-bold font-mono tabular-nums mt-1.5">
+            {openQueueCount}
+          </div>
+          <div className="text-[11px] text-emerald-100/75 mt-0.5">
+            Pending &amp; in-progress tasks
+          </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setViewMode('overdue')}
+          className="text-left card-surface card-interactive hover:border-[#059669] rounded-xl p-4 transition-colors btn-press"
+        >
+          <div className="text-xs font-medium text-[#526259]">Overdue Tasks</div>
+          <div
+            className={`text-2xl font-bold font-mono tabular-nums mt-1.5 ${
+              overdueQueueCount > 0 ? 'text-[#DC2626]' : 'text-[#047857]'
+            }`}
+          >
+            {overdueQueueCount}
+          </div>
+          <div className="text-[11px] text-[#526259] mt-0.5">Past target due date</div>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setViewMode('pending');
+            setPriorityFilter('High');
+          }}
+          className="text-left card-surface card-interactive hover:border-[#059669] rounded-xl p-4 transition-colors btn-press"
+        >
+          <div className="text-xs font-medium text-[#526259]">High Priority Open</div>
+          <div className="text-2xl font-bold font-mono tabular-nums text-amber-700 mt-1.5">
+            {highPriorityOpenCount}
+          </div>
+          <div className="text-[11px] text-[#526259] mt-0.5">Urgent administrative outreach</div>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setViewMode('Completed')}
+          className="text-left card-surface card-interactive hover:border-[#059669] rounded-xl p-4 transition-colors btn-press"
+        >
+          <div className="text-xs font-medium text-[#526259]">Completed</div>
+          <div className="text-2xl font-bold font-mono tabular-nums text-[#047857] mt-1.5">
+            {completedCount}
+          </div>
+          <div className="text-[11px] text-[#526259] mt-0.5">Resolved follow-up items</div>
+        </button>
+      </section>
+
       {/* Toolbar */}
-      <div className="bg-white border border-[#E4E7E2] rounded-xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="card-surface rounded-xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex flex-wrap items-center gap-3">
           <div
-            className="flex items-center gap-1 p-1 bg-[#F1F4F1] rounded-lg overflow-x-auto"
+            className="flex items-center gap-1 p-1 bg-[#F1F5F2] rounded-lg overflow-x-auto"
             role="group"
             aria-label="Filter follow-ups by queue view"
           >
@@ -235,8 +311,8 @@ export function FollowUpsView({
                 onClick={() => setViewMode(tab.id as typeof viewMode)}
                 className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                   viewMode === tab.id
-                    ? 'bg-white text-[#0C291E] shadow-sm'
-                    : 'text-[#526058] hover:text-[#16211C]'
+                    ? 'bg-white text-[#0B261C] shadow-xs'
+                    : 'text-[#526259] hover:text-[#111C17]'
                 }`}
               >
                 {tab.label}
@@ -268,7 +344,7 @@ export function FollowUpsView({
             setFormError(null);
             setShowCreateModal(true);
           }}
-          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg transition-colors whitespace-nowrap shrink-0"
+          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg transition-colors whitespace-nowrap shrink-0 btn-press"
         >
           <Plus className="w-4 h-4" aria-hidden="true" />
           New Follow-up
@@ -276,24 +352,60 @@ export function FollowUpsView({
       </div>
 
       {/* Follow-up Table */}
-      <div className="bg-white border border-[#E4E7E2] rounded-xl overflow-hidden">
-        <div className="px-5 py-3.5 border-b border-[#E4E7E2] flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-[#16211C]">Administrative Follow-up Tasks</h2>
-          <span className="text-xs font-mono tabular-nums text-[#526058]">
+      <div className="card-surface rounded-xl overflow-hidden">
+        <div className="px-5 py-3.5 border-b border-[#E3E8E4] flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-[#111C17]">Administrative Follow-up Tasks</h2>
+          <span className="text-xs font-mono tabular-nums text-[#526259]">
             {tasks.length} task{tasks.length === 1 ? '' : 's'}
           </span>
         </div>
 
         {loading ? (
-          <div className="p-6 space-y-3">
+          <div className="p-5 space-y-3" aria-label="Loading follow-up tasks">
             {Array.from({ length: 5 }).map((_, i) => (
-              <div key={i} className="h-12 bg-slate-100 rounded animate-pulse" />
+              <div key={i} className="flex items-center gap-3 p-2.5 rounded-lg bg-[#F6F8F6]">
+                <div className="w-8 h-8 rounded-full bg-[#E3E8E4] shrink-0" />
+                <div className="flex-1 space-y-1.5">
+                  <div className="h-3.5 w-48 bg-[#E3E8E4] rounded" />
+                  <div className="h-2.5 w-32 bg-[#EEF2EF] rounded" />
+                </div>
+                <div className="h-3.5 w-20 bg-[#E3E8E4] rounded" />
+              </div>
             ))}
           </div>
         ) : tasks.length === 0 ? (
-          <div className="p-10 text-center">
-            <ClipboardList className="w-8 h-8 text-slate-300 mx-auto mb-2" aria-hidden="true" />
-            <p className="text-sm text-[#526058]">No follow-up tasks in this view.</p>
+          <div className="p-10 text-center space-y-3">
+            <ClinicEmptyIllustration variant="followups" />
+            <div className="space-y-1">
+              <p className="text-sm font-medium text-[#111C17]">No follow-up tasks in this view</p>
+              <p className="text-xs text-[#526058]">
+                Switch queue views, reset priority filters, or create a new outreach item.
+              </p>
+            </div>
+            <div className="flex items-center justify-center gap-2 pt-1">
+              {(viewMode !== 'all' || priorityFilter !== 'All') && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setViewMode('all');
+                    setPriorityFilter('All');
+                  }}
+                  className="px-3.5 py-1.5 text-xs font-medium text-[#111C17] bg-white hover:bg-[#F6F8F6] border border-[#D4DAD4] rounded-lg transition-colors btn-press"
+                >
+                  View All Tasks
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setFormError(null);
+                  setShowCreateModal(true);
+                }}
+                className="px-3.5 py-1.5 text-xs font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg transition-colors btn-press"
+              >
+                New Follow-up
+              </button>
+            </div>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -314,6 +426,7 @@ export function FollowUpsView({
                     (task.status === 'Pending' || task.status === 'In Progress') &&
                     task.dueDate < todayKey;
                   const isRowBusy = updatingTaskId === task.id;
+                  const displayPatient = task.patientName ?? task.patientId;
                   return (
                     <tr key={task.id} className="hover:bg-[#F7F8F6] transition-colors">
                       <td className={`${cellPad} font-mono tabular-nums text-xs`}>
@@ -323,24 +436,27 @@ export function FollowUpsView({
                         )}
                       </td>
                       <td className={cellPad}>
-                        {onOpenPatient ? (
-                          <button
-                            type="button"
-                            onClick={() => onOpenPatient(task.patientId)}
-                            className="text-left group"
-                            aria-label={`Open patient record for ${task.patientName} (${task.patientId})`}
-                          >
-                            <div className="font-medium text-[#047857] group-hover:underline">
-                              {task.patientName}
+                        <div className="flex items-center gap-2.5">
+                          <EditorialAvatar name={displayPatient} role="patient" size="sm" />
+                          {onOpenPatient ? (
+                            <button
+                              type="button"
+                              onClick={() => onOpenPatient(task.patientId)}
+                              className="text-left group"
+                              aria-label={`Open patient record for ${displayPatient} (${task.patientId})`}
+                            >
+                              <div className="font-medium text-[#047857] group-hover:underline">
+                                {displayPatient}
+                              </div>
+                              <div className="text-xs font-mono text-[#526058]">{task.patientId}</div>
+                            </button>
+                          ) : (
+                            <div>
+                              <div className="font-medium text-[#16211C]">{displayPatient}</div>
+                              <div className="text-xs font-mono text-[#526058]">{task.patientId}</div>
                             </div>
-                            <div className="text-xs font-mono text-[#526058]">{task.patientId}</div>
-                          </button>
-                        ) : (
-                          <>
-                            <div className="font-medium text-[#16211C]">{task.patientName}</div>
-                            <div className="text-xs font-mono text-[#526058]">{task.patientId}</div>
-                          </>
-                        )}
+                          )}
+                        </div>
                       </td>
                       <td className={`${cellPad} text-xs text-[#16211C] max-w-md`}>
                         {task.description}
@@ -443,14 +559,12 @@ export function FollowUpsView({
       </div>
 
       {/* Create Follow-up Modal */}
-      {showCreateModal && (
-        <div
-          className="fixed inset-0 z-50 bg-slate-950/50 flex items-center justify-center p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="create-fu-title"
-        >
-          <div className="bg-white border border-[#E4E7E2] rounded-xl w-full max-w-lg p-6 space-y-4 shadow-xl max-h-[90vh] overflow-y-auto">
+      <ModalShell
+        open={showCreateModal}
+        onClose={() => setShowCreateModal(false)}
+        labelledBy="create-fu-title"
+        maxWidthClass="max-w-lg"
+      >
             <div className="flex items-center justify-between">
               <h3 id="create-fu-title" className="text-base font-semibold text-[#16211C]">
                 Create Administrative Follow-up
@@ -562,25 +676,23 @@ export function FollowUpsView({
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="px-4 py-2 text-sm font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg disabled:opacity-50"
+                  className="px-4 py-2 text-sm font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg disabled:opacity-50 btn-press"
                 >
                   {submitting ? 'Creating...' : 'Create Task'}
                 </button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
+      </ModalShell>
 
       {/* Edit Follow-up Modal */}
-      {editingTask && (
-        <div
-          className="fixed inset-0 z-50 bg-slate-950/50 flex items-center justify-center p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="edit-fu-title"
-        >
-          <div className="bg-white border border-[#E4E7E2] rounded-xl w-full max-w-lg p-6 space-y-4 shadow-xl max-h-[90vh] overflow-y-auto">
+      <ModalShell
+        open={Boolean(editingTask)}
+        onClose={() => setEditingTask(null)}
+        labelledBy="edit-fu-title"
+        maxWidthClass="max-w-lg"
+      >
+        {editingTask && (
+          <>
             <div className="flex items-center justify-between">
               <div>
                 <h3 id="edit-fu-title" className="text-base font-semibold text-[#16211C]">
@@ -681,15 +793,15 @@ export function FollowUpsView({
                 <button
                   type="submit"
                   disabled={editSubmitting}
-                  className="px-4 py-2 text-sm font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg disabled:opacity-50"
+                  className="px-4 py-2 text-sm font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg disabled:opacity-50 btn-press"
                 >
                   {editSubmitting ? 'Saving...' : 'Save Changes'}
                 </button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </ModalShell>
     </div>
   );
 }

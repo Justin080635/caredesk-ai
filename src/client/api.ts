@@ -3,6 +3,7 @@ import type {
   Appointment,
   AppointmentStatus,
   AssistantResponse,
+  AssistantStreamEvent,
   AuditLogEntry,
   AvailableSlot,
   DailyReport,
@@ -288,6 +289,87 @@ export async function sendAssistantQuery(prompt: string): Promise<AssistantRespo
     body: JSON.stringify({ prompt }),
   });
   return res.data;
+}
+
+export async function streamAssistantQuery(
+  prompt: string,
+  options: {
+    signal?: AbortSignal;
+    onEvent: (event: AssistantStreamEvent) => void;
+  }
+): Promise<AssistantResponse> {
+  const headers = new Headers({ 'Content-Type': 'application/json' });
+  if (inMemoryToken) {
+    headers.set('Authorization', `Bearer ${inMemoryToken}`);
+  }
+
+  const response = await fetch('/api/assistant/stream', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ prompt }),
+    signal: options.signal,
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    let parsed: { error?: { code?: string; message?: string } } = {};
+    try {
+      parsed = text ? JSON.parse(text) : {};
+    } catch {
+      parsed = {};
+    }
+    throw new ApiClientError(
+      response.status,
+      parsed.error?.code ?? 'ASSISTANT_ERROR',
+      parsed.error?.message ?? `Assistant request failed (${response.status}).`
+    );
+  }
+
+  if (!response.body) {
+    throw new ApiClientError(500, 'EMPTY_STREAM', 'Assistant stream returned no readable body.');
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let finalResponse: AssistantResponse | null = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let boundaryIdx = buffer.indexOf('\n\n');
+    while (boundaryIdx !== -1) {
+      const frame = buffer.slice(0, boundaryIdx);
+      buffer = buffer.slice(boundaryIdx + 2);
+      boundaryIdx = buffer.indexOf('\n\n');
+
+      for (const line of frame.split('\n')) {
+        if (!line.startsWith('data: ')) continue;
+        const raw = line.slice(6).trim();
+        if (!raw) continue;
+        const event = JSON.parse(raw) as AssistantStreamEvent;
+        options.onEvent(event);
+        if (event.type === 'error') {
+          throw new ApiClientError(500, event.code, event.message);
+        }
+        if (event.type === 'complete') {
+          finalResponse = event.response;
+        }
+      }
+    }
+  }
+
+  if (!finalResponse) {
+    throw new ApiClientError(
+      500,
+      'EMPTY_RESPONSE',
+      'Assistant stream ended before returning a complete response.'
+    );
+  }
+
+  return finalResponse;
 }
 
 export async function confirmAssistantAction(params: {

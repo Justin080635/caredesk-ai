@@ -88,14 +88,14 @@ export function ClinicCalendar({
               setViewMonth(now.getMonth());
               onSelectDate(todayKey);
             }}
-            className="px-2.5 py-1 text-xs font-medium text-[#047857] hover:bg-[#EDF4F0] rounded-md transition-colors"
+            className="btn-press px-2.5 py-1 text-xs font-medium text-[#047857] hover:bg-[#EDF4F0] rounded-md transition-colors"
           >
             Today
           </button>
           <button
             type="button"
             onClick={handlePrevMonth}
-            className="p-1.5 text-[#526058] hover:text-[#16211C] hover:bg-[#F7F8F6] rounded-md transition-colors"
+            className="btn-press p-1.5 text-[#526058] hover:text-[#16211C] hover:bg-[#F7F8F6] rounded-md transition-colors"
             aria-label="Previous month"
           >
             <ChevronLeft className="w-4 h-4" aria-hidden="true" />
@@ -103,7 +103,7 @@ export function ClinicCalendar({
           <button
             type="button"
             onClick={handleNextMonth}
-            className="p-1.5 text-[#526058] hover:text-[#16211C] hover:bg-[#F7F8F6] rounded-md transition-colors"
+            className="btn-press p-1.5 text-[#526058] hover:text-[#16211C] hover:bg-[#F7F8F6] rounded-md transition-colors"
             aria-label="Next month"
           >
             <ChevronRight className="w-4 h-4" aria-hidden="true" />
@@ -111,7 +111,10 @@ export function ClinicCalendar({
         </div>
       </div>
 
-      <div className="grid grid-cols-7 gap-1 text-center">
+      <div
+        key={`${viewYear}-${viewMonth}`}
+        className="grid grid-cols-7 gap-1 text-center animate-view-enter"
+      >
         {WEEKDAYS.map((wd) => (
           <div key={wd} className="py-1 text-[11px] font-medium text-[#526058]">
             {wd}
@@ -134,7 +137,7 @@ export function ClinicCalendar({
               onClick={() => onSelectDate(cell.dateKey!)}
               aria-label={`${cell.dateKey}${summary ? `, ${summary.total} appointments` : ', no appointments'}`}
               aria-pressed={isSelected}
-              className={`${
+              className={`btn-press ${
                 compact ? 'h-10 p-1 items-center justify-center' : 'h-16 p-1.5 items-start justify-between'
               } flex flex-col rounded-lg border text-left transition-colors ${
                 isSelected

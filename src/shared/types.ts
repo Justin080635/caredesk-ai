@@ -133,8 +133,23 @@ export interface OverviewReport {
 export interface AssistantPlannedTool {
   toolName: string;
   endpoint: string;
-  status: 'local-rest-preview' | 'awaiting-confirmation' | 'executed-via-local-rest' | 'mcp-not-connected';
+  status:
+    | 'local-rest-preview'
+    | 'awaiting-confirmation'
+    | 'executed-via-local-rest'
+    | 'mcp-not-connected'
+    | 'failed';
   description: string;
+  durationMs?: number;
+  resultSummary?: string;
+  errorMessage?: string;
+}
+
+export interface AssistantResponseSection {
+  id: string;
+  title: string;
+  body?: string;
+  bullets?: string[];
 }
 
 export interface PendingConfirmationAction {
@@ -151,6 +166,10 @@ export interface AssistantResponse {
   intent: string;
   headline: string;
   summary: string;
+  markdown?: string;
+  sections?: AssistantResponseSection[];
+  followUpSuggestions?: string[];
+  engine?: 'gemini-streaming-rest' | 'local-nlu-rest';
   integrationNotice: string;
   mode: 'development-local-rest-preview';
   plannedTools: AssistantPlannedTool[];
@@ -160,12 +179,52 @@ export interface AssistantResponse {
       | 'unconfirmed_appointments'
       | 'missed_appointments'
       | 'followup_plan'
+      | 'followup_queue'
       | 'available_slots'
       | 'reschedule_proposal'
+      | 'patient_summary'
       | 'action_completed'
       | 'non_clinical_notice';
     items?: unknown[];
+    patient?: Patient;
     metrics?: Record<string, number | string>;
   };
   pendingConfirmation?: PendingConfirmationAction;
 }
+
+export type AssistantStreamEvent =
+  | {
+      type: 'status';
+      phase: 'analyzing' | 'querying' | 'synthesizing';
+      message: string;
+    }
+  | {
+      type: 'tool_start';
+      toolCallId: string;
+      toolName: string;
+      endpoint: string;
+      description: string;
+    }
+  | {
+      type: 'tool_done';
+      toolCallId: string;
+      toolName: string;
+      endpoint: string;
+      status: 'executed-via-local-rest' | 'awaiting-confirmation' | 'failed';
+      durationMs: number;
+      resultSummary: string;
+      errorMessage?: string;
+    }
+  | {
+      type: 'delta';
+      text: string;
+    }
+  | {
+      type: 'complete';
+      response: AssistantResponse;
+    }
+  | {
+      type: 'error';
+      code: string;
+      message: string;
+    };

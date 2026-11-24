@@ -27,6 +27,8 @@ import type {
   Patient,
 } from '../shared/types';
 import { ClinicCalendar } from './ClinicCalendar';
+import { ClinicEmptyIllustration, EditorialAvatar } from './ClinicIllustrations';
+import { ModalShell } from './ModalShell';
 import { AppointmentStatusText } from './StatusText';
 
 interface AppointmentsViewProps {
@@ -439,38 +441,91 @@ export function AppointmentsView({
 
   const statuses = ['All', 'Scheduled', 'Confirmed', 'Completed', 'Missed', 'Cancelled'];
   const cellPad = compactDensity ? 'py-2 px-4' : 'py-3 px-4';
+  const confirmedCount = appointments.filter((a) => a.status === 'Confirmed').length;
+  const unconfirmedCount = appointments.filter((a) => a.status === 'Scheduled').length;
+  const missedCount = appointments.filter((a) => a.status === 'Missed').length;
 
   const renderPatientLink = (patientName: string | undefined, patientId: string) => {
+    const displayName = patientName ?? patientId;
     if (!onOpenPatient) {
       return (
-        <>
-          <div className="font-medium text-[#16211C]">{patientName}</div>
-          <div className="text-xs font-mono text-[#526058]">{patientId}</div>
-        </>
+        <div className="flex items-center gap-2.5">
+          <EditorialAvatar name={displayName} role="patient" size="sm" />
+          <div>
+            <div className="font-medium text-[#111C17]">{displayName}</div>
+            <div className="text-xs font-mono text-[#526259]">{patientId}</div>
+          </div>
+        </div>
       );
     }
     return (
-      <button
-        type="button"
-        onClick={() => onOpenPatient(patientId)}
-        className="text-left group"
-        aria-label={`Open patient record for ${patientName ?? patientId}`}
-      >
-        <div className="font-medium text-[#047857] group-hover:underline">{patientName}</div>
-        <div className="text-xs font-mono text-[#526058]">{patientId}</div>
-      </button>
+      <div className="flex items-center gap-2.5">
+        <EditorialAvatar name={displayName} role="patient" size="sm" />
+        <button
+          type="button"
+          onClick={() => onOpenPatient(patientId)}
+          className="text-left group"
+          aria-label={`Open patient record for ${displayName}`}
+        >
+          <div className="font-medium text-[#047857] group-hover:underline">{displayName}</div>
+          <div className="text-xs font-mono text-[#526259]">{patientId}</div>
+        </button>
+      </div>
     );
   };
 
   return (
     <div className="space-y-5">
+      {/* Schedule Summary Strip */}
+      <section className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="bg-[#0B261C] text-white rounded-xl p-4">
+          <div className="text-xs font-medium text-emerald-200/85">
+            {viewMode === 'calendar' ? `Visits on ${calendarDate.slice(5)}` : 'Listed Visits'}
+          </div>
+          <div className="text-2xl font-bold font-mono tabular-nums mt-1.5">
+            {appointments.length}
+          </div>
+          <div className="text-[11px] text-emerald-100/75 mt-0.5">
+            Matching active clinic filters
+          </div>
+        </div>
+
+        <div className="card-surface rounded-xl p-4">
+          <div className="text-xs font-medium text-[#526259]">Confirmed</div>
+          <div className="text-2xl font-bold font-mono tabular-nums text-[#047857] mt-1.5">
+            {confirmedCount}
+          </div>
+          <div className="text-[11px] text-[#526259] mt-0.5">Ready for clinician check-in</div>
+        </div>
+
+        <div className="card-surface rounded-xl p-4">
+          <div className="text-xs font-medium text-[#526259]">Awaiting Confirmation</div>
+          <div className="text-2xl font-bold font-mono tabular-nums text-amber-700 mt-1.5">
+            {unconfirmedCount}
+          </div>
+          <div className="text-[11px] text-[#526259] mt-0.5">Scheduled visits pending outreach</div>
+        </div>
+
+        <div className="card-surface rounded-xl p-4">
+          <div className="text-xs font-medium text-[#526259]">Missed in View</div>
+          <div
+            className={`text-2xl font-bold font-mono tabular-nums mt-1.5 ${
+              missedCount > 0 ? 'text-[#DC2626]' : 'text-[#047857]'
+            }`}
+          >
+            {missedCount}
+          </div>
+          <div className="text-[11px] text-[#526259] mt-0.5">Eligible for rescheduling</div>
+        </div>
+      </section>
+
       {/* Toolbar */}
-      <div className="bg-white border border-[#E4E7E2] rounded-xl p-4 space-y-3">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-3 flex-1">
-            <div className="relative flex-1 min-w-[200px] max-w-xs">
+      <div className="card-surface rounded-xl p-4 space-y-3">
+        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-2.5">
+          <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 flex-1 min-w-0">
+            <div className="relative flex-1 min-w-[160px] max-w-[205px]">
               <Search
-                className="w-4 h-4 text-[#526058] absolute left-3 top-1/2 -translate-y-1/2"
+                className="w-4 h-4 text-[#526259] absolute left-2.5 top-1/2 -translate-y-1/2"
                 aria-hidden="true"
               />
               <label htmlFor="apt-search-input" className="sr-only">
@@ -482,13 +537,13 @@ export function AppointmentsView({
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search ID, patient, clinician..."
-                className="w-full pl-9 pr-3 py-2 text-sm border border-[#D4DAD4] rounded-lg"
+                className="w-full pl-8 pr-2.5 py-2 text-xs sm:text-sm border border-[#D4DAD4] rounded-lg"
               />
             </div>
 
             {viewMode === 'list' && (
               <>
-                <div>
+                <div className="shrink-0">
                   <label htmlFor="apt-date-filter" className="sr-only">
                     Filter by date
                   </label>
@@ -497,14 +552,14 @@ export function AppointmentsView({
                     type="date"
                     value={dateFilter}
                     onChange={(e) => setDateFilter(e.target.value)}
-                    className="px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg bg-white"
+                    className="px-2.5 py-2 text-xs sm:text-sm border border-[#D4DAD4] rounded-lg bg-white"
                   />
                 </div>
                 {dateFilter && (
                   <button
                     type="button"
                     onClick={() => setDateFilter('')}
-                    className="text-xs font-medium text-[#526058] hover:text-[#16211C]"
+                    className="text-xs font-medium text-[#526259] hover:text-[#111C17] whitespace-nowrap shrink-0"
                   >
                     All Dates
                   </button>
@@ -512,7 +567,7 @@ export function AppointmentsView({
               </>
             )}
 
-            <div>
+            <div className="shrink-0">
               <label htmlFor="apt-dept-filter" className="sr-only">
                 Filter by department
               </label>
@@ -520,7 +575,7 @@ export function AppointmentsView({
                 id="apt-dept-filter"
                 value={deptFilter}
                 onChange={(e) => setDeptFilter(e.target.value)}
-                className="px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg bg-white"
+                className="px-2.5 py-2 text-xs sm:text-sm border border-[#D4DAD4] rounded-lg bg-white"
               >
                 <option value="All">All Departments</option>
                 {CLINIC_DEPARTMENTS.map((dept) => (
@@ -532,17 +587,17 @@ export function AppointmentsView({
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
             <div
-              className="flex items-center gap-1 p-1 bg-[#F1F4F1] rounded-lg"
+              className="flex items-center gap-1 p-1 bg-[#F1F5F2] rounded-lg"
               role="group"
               aria-label="Appointment display view"
             >
               <button
                 type="button"
                 onClick={() => setViewMode('list')}
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
-                  viewMode === 'list' ? 'bg-white text-[#0C291E] shadow-sm' : 'text-[#526058]'
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+                  viewMode === 'list' ? 'bg-white text-[#0B261C] shadow-xs' : 'text-[#526259]'
                 }`}
               >
                 <List className="w-3.5 h-3.5" aria-hidden="true" />
@@ -551,8 +606,8 @@ export function AppointmentsView({
               <button
                 type="button"
                 onClick={() => setViewMode('calendar')}
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
-                  viewMode === 'calendar' ? 'bg-white text-[#0C291E] shadow-sm' : 'text-[#526058]'
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
+                  viewMode === 'calendar' ? 'bg-white text-[#0B261C] shadow-xs' : 'text-[#526259]'
                 }`}
               >
                 <Calendar className="w-3.5 h-3.5" aria-hidden="true" />
@@ -563,7 +618,7 @@ export function AppointmentsView({
             <button
               type="button"
               onClick={handleOpenAvailability}
-              className="inline-flex items-center gap-2 px-3.5 py-2 text-sm font-medium text-[#0C291E] bg-[#EDF4F0] hover:bg-[#D7E6DD] rounded-lg transition-colors whitespace-nowrap shrink-0"
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs sm:text-sm font-medium text-[#0B261C] bg-[#ECF4EF] hover:bg-[#D7E6DD] rounded-lg transition-colors whitespace-nowrap shrink-0 btn-press"
             >
               <Clock className="w-4 h-4 text-[#047857]" aria-hidden="true" />
               {showAvailability ? 'Hide Availability' : 'Check Availability'}
@@ -575,7 +630,7 @@ export function AppointmentsView({
                 setCreateError(null);
                 setShowCreateModal(true);
               }}
-              className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg transition-colors whitespace-nowrap shrink-0"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs sm:text-sm font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg transition-colors whitespace-nowrap shrink-0 btn-press"
             >
               <Plus className="w-4 h-4" aria-hidden="true" />
               Schedule Appointment
@@ -585,7 +640,7 @@ export function AppointmentsView({
 
         {/* Status Segmented Control */}
         <div
-          className="flex items-center gap-1 p-1 bg-[#F1F4F1] rounded-lg overflow-x-auto w-fit max-w-full"
+          className="flex items-center gap-1 p-1 bg-[#F1F5F2] rounded-lg overflow-x-auto w-fit max-w-full"
           role="group"
           aria-label="Filter appointments by status"
         >
@@ -596,8 +651,8 @@ export function AppointmentsView({
               onClick={() => setStatusFilter(st)}
               className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                 statusFilter === st
-                  ? 'bg-white text-[#0C291E] shadow-sm'
-                  : 'text-[#526058] hover:text-[#16211C]'
+                  ? 'bg-white text-[#0B261C] shadow-xs'
+                  : 'text-[#526259] hover:text-[#111C17]'
               }`}
             >
               {st}
@@ -608,18 +663,18 @@ export function AppointmentsView({
 
       {/* Interactive Slot Availability Finder */}
       {showAvailability && (
-        <section className="bg-white border border-[#E4E7E2] rounded-xl p-5 space-y-4">
+        <section className="card-surface rounded-xl p-5 space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <h3 className="text-sm font-semibold text-[#16211C]">
+              <h3 className="text-sm font-semibold text-[#111C17]">
                 Conflict-Free Slot Availability
               </h3>
-              <p className="text-xs text-[#526058] mt-0.5">
+              <p className="text-xs text-[#526259] mt-0.5">
                 Next open 30-minute clinic slots computed from live clinician calendars.
               </p>
             </div>
             <div className="flex items-center gap-2">
-              <label htmlFor="avail-dept-select" className="text-xs text-[#526058]">
+              <label htmlFor="avail-dept-select" className="text-xs text-[#526259]">
                 Department:
               </label>
               <select
@@ -644,26 +699,26 @@ export function AppointmentsView({
           {availLoading ? (
             <div className="h-20 bg-slate-100 rounded animate-pulse" />
           ) : availSlots.length === 0 ? (
-            <p className="text-xs text-[#526058]">No open slots available in this range.</p>
+            <p className="text-xs text-[#526259]">No open slots available in this range.</p>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               {availSlots.map((slot, idx) => (
                 <div
                   key={`${slot.date}-${slot.time}-${slot.clinician}-${idx}`}
-                  className="p-3 bg-[#F7F8F6] border border-[#E4E7E2] rounded-lg flex items-center justify-between gap-2"
+                  className="p-3 bg-[#F6F8F6] rounded-lg flex items-center justify-between gap-2"
                 >
                   <div>
-                    <div className="text-xs font-mono tabular-nums font-semibold text-[#0C291E]">
+                    <div className="text-xs font-mono tabular-nums font-semibold text-[#0B261C]">
                       {slot.date} · {slot.time}
                     </div>
-                    <div className="text-[11px] text-[#526058] mt-0.5">
+                    <div className="text-[11px] text-[#526259] mt-0.5">
                       {slot.department} · {slot.clinician}
                     </div>
                   </div>
                   <button
                     type="button"
                     onClick={() => handleBookFromSlot(slot)}
-                    className="px-2.5 py-1 text-xs font-medium text-[#047857] hover:bg-[#EDF4F0] border border-[#C6DFD1] rounded transition-colors whitespace-nowrap shrink-0"
+                    className="px-2.5 py-1 text-xs font-medium text-[#047857] bg-white hover:bg-[#ECF4EF] border border-[#C6DFD1] rounded transition-colors whitespace-nowrap shrink-0"
                   >
                     Book
                   </button>
@@ -677,7 +732,7 @@ export function AppointmentsView({
       {/* Calendar View Split */}
       {viewMode === 'calendar' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          <div className="lg:col-span-5 bg-white border border-[#E4E7E2] rounded-xl p-5">
+          <div className="lg:col-span-5 card-surface rounded-xl p-5">
             <ClinicCalendar
               selectedDate={calendarDate}
               onSelectDate={(d) => setCalendarDate(d)}
@@ -685,13 +740,13 @@ export function AppointmentsView({
             />
           </div>
 
-          <div className="lg:col-span-7 bg-white border border-[#E4E7E2] rounded-xl overflow-hidden">
-            <div className="px-5 py-3.5 border-b border-[#E4E7E2] flex items-center justify-between">
+          <div className="lg:col-span-7 card-surface rounded-xl overflow-hidden">
+            <div className="px-5 py-3.5 border-b border-[#E3E8E4] flex items-center justify-between">
               <div>
-                <h2 className="text-sm font-semibold text-[#16211C]">
+                <h2 className="text-sm font-semibold text-[#111C17]">
                   Schedule for <span className="font-mono">{calendarDate}</span>
                 </h2>
-                <p className="text-xs text-[#526058]">
+                <p className="text-xs text-[#526259]">
                   {appointments.length} appointment{appointments.length === 1 ? '' : 's'} matching filters
                 </p>
               </div>
@@ -702,46 +757,73 @@ export function AppointmentsView({
                   setCreateError(null);
                   setShowCreateModal(true);
                 }}
-                className="text-xs font-medium text-[#047857] hover:text-[#0C291E]"
+                className="text-xs font-medium text-[#047857] hover:text-[#0B261C]"
               >
                 + Book on {calendarDate}
               </button>
             </div>
 
             {appointments.length === 0 ? (
-              <div className="p-10 text-center">
-                <Calendar className="w-8 h-8 text-slate-300 mx-auto mb-2" aria-hidden="true" />
-                <p className="text-sm text-[#526058]">No appointments scheduled for this date.</p>
+              <div className="p-10 text-center space-y-3">
+                <ClinicEmptyIllustration variant="appointments" />
+                <div className="space-y-1">
+                  <p className="text-sm font-medium text-[#111C17]">
+                    No appointments scheduled for this date
+                  </p>
+                  <p className="text-xs text-[#526259]">
+                    Book a conflict-free slot on {calendarDate} or adjust status filters.
+                  </p>
+                </div>
+                <div className="flex items-center justify-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNewDate(calendarDate);
+                      setCreateError(null);
+                      setShowCreateModal(true);
+                    }}
+                    className="px-3.5 py-1.5 text-xs font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg transition-colors btn-press"
+                  >
+                    Book on {calendarDate}
+                  </button>
+                </div>
               </div>
             ) : (
-              <div className="divide-y divide-[#E4E7E2]">
+              <div className="divide-y divide-[#EEF2EF]">
                 {appointments.map((apt) => (
                   <div
                     key={apt.id}
-                    className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-[#F7F8F6] transition-colors"
+                    className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-[#F6F8F6] transition-colors"
                   >
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2 text-xs">
-                        <span className="font-mono tabular-nums font-semibold text-[#0C291E]">
-                          {apt.appointmentTime}
-                        </span>
-                        {onOpenPatient ? (
-                          <button
-                            type="button"
-                            onClick={() => onOpenPatient(apt.patientId)}
-                            className="font-semibold text-[#047857] hover:underline"
-                          >
-                            {apt.patientName}
-                          </button>
-                        ) : (
-                          <span className="font-semibold text-[#16211C]">{apt.patientName}</span>
-                        )}
-                        <span className="font-mono text-[#526058]">
-                          · {apt.patientId} · {apt.id}
-                        </span>
-                      </div>
-                      <div className="text-xs text-[#526058] mt-1">
-                        {apt.department} · {apt.clinician}
+                    <div className="flex items-center gap-3 min-w-0">
+                      <EditorialAvatar
+                        name={apt.patientName ?? apt.patientId}
+                        role="patient"
+                        size="sm"
+                      />
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2 text-xs">
+                          <span className="font-mono tabular-nums font-semibold text-[#0B261C]">
+                            {apt.appointmentTime}
+                          </span>
+                          {onOpenPatient ? (
+                            <button
+                              type="button"
+                              onClick={() => onOpenPatient(apt.patientId)}
+                              className="font-semibold text-[#047857] hover:underline"
+                            >
+                              {apt.patientName}
+                            </button>
+                          ) : (
+                            <span className="font-semibold text-[#111C17]">{apt.patientName}</span>
+                          )}
+                          <span className="font-mono text-[#526259]">
+                            · {apt.patientId} · {apt.id}
+                          </span>
+                        </div>
+                        <div className="text-xs text-[#526259] mt-1">
+                          {apt.department} · {apt.clinician}
+                        </div>
                       </div>
                     </div>
                     <div className="flex items-center gap-3 shrink-0">
@@ -749,7 +831,7 @@ export function AppointmentsView({
                       <button
                         type="button"
                         onClick={() => openEditModal(apt)}
-                        className="text-xs font-medium text-[#047857] hover:text-[#0C291E]"
+                        className="text-xs font-medium text-[#047857] hover:text-[#0B261C]"
                       >
                         Reschedule / Update
                       </button>
@@ -768,31 +850,71 @@ export function AppointmentsView({
           <div
             className={`${
               detailApt ? 'lg:col-span-8' : 'lg:col-span-12'
-            } bg-white border border-[#E4E7E2] rounded-xl overflow-hidden`}
+            } card-surface rounded-xl overflow-hidden`}
           >
-            <div className="px-5 py-3.5 border-b border-[#E4E7E2] flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-[#16211C]">Appointment Schedule</h2>
-              <span className="text-xs font-mono tabular-nums text-[#526058]">
+            <div className="px-5 py-3.5 border-b border-[#E3E8E4] flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-[#111C17]">Appointment Schedule</h2>
+              <span className="text-xs font-mono tabular-nums text-[#526259]">
                 {appointments.length} appointment{appointments.length === 1 ? '' : 's'}
               </span>
             </div>
 
             {loading ? (
-              <div className="p-6 space-y-3">
+              <div className="p-5 space-y-3" aria-label="Loading appointments">
                 {Array.from({ length: 6 }).map((_, i) => (
-                  <div key={i} className="h-10 bg-slate-100 rounded animate-pulse" />
+                  <div key={i} className="flex items-center gap-3 p-2.5 rounded-lg bg-[#F6F8F6]">
+                    <div className="w-8 h-8 rounded-full bg-[#E3E8E4] shrink-0" />
+                    <div className="flex-1 space-y-1.5">
+                      <div className="h-3.5 w-44 bg-[#E3E8E4] rounded" />
+                      <div className="h-2.5 w-32 bg-[#EEF2EF] rounded" />
+                    </div>
+                    <div className="h-3.5 w-20 bg-[#E3E8E4] rounded" />
+                  </div>
                 ))}
               </div>
             ) : appointments.length === 0 ? (
-              <div className="p-10 text-center">
-                <Calendar className="w-8 h-8 text-slate-300 mx-auto mb-2" aria-hidden="true" />
-                <p className="text-sm text-[#526058]">No appointments match the current filters.</p>
+              <div className="p-10 text-center space-y-3">
+                <ClinicEmptyIllustration variant="appointments" />
+                <div className="space-y-1">
+                  <p className="text-sm font-medium text-[#111C17]">
+                    No appointments match the current filters
+                  </p>
+                  <p className="text-xs text-[#526259]">
+                    Clear active filters or schedule a new clinic visit.
+                  </p>
+                </div>
+                <div className="flex items-center justify-center gap-2 pt-1">
+                  {(search || dateFilter || statusFilter !== 'All' || deptFilter !== 'All') && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSearch('');
+                        setDateFilter('');
+                        setStatusFilter('All');
+                        setDeptFilter('All');
+                      }}
+                      className="px-3.5 py-1.5 text-xs font-medium text-[#111C17] bg-white hover:bg-[#F6F8F6] border border-[#D4DAD4] rounded-lg transition-colors btn-press"
+                    >
+                      Clear Filters
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCreateError(null);
+                      setShowCreateModal(true);
+                    }}
+                    className="px-3.5 py-1.5 text-xs font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg transition-colors btn-press"
+                  >
+                    Schedule Appointment
+                  </button>
+                </div>
               </div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse">
                   <thead>
-                    <tr className="border-b border-[#E4E7E2] bg-[#F7F8F6] text-xs font-medium text-[#526058]">
+                    <tr className="border-b border-[#E3E8E4] bg-[#F6F8F6] text-xs font-medium text-[#526259]">
                       <th className="py-2.5 px-4">ID</th>
                       <th className="py-2.5 px-4">Date &amp; Time</th>
                       <th className="py-2.5 px-4">Patient</th>
@@ -801,15 +923,15 @@ export function AppointmentsView({
                       <th className="py-2.5 px-4 text-right">Actions</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-[#E4E7E2] text-sm">
+                  <tbody className="divide-y divide-[#EEF2EF] text-sm">
                     {appointments.map((apt) => (
                       <tr
                         key={apt.id}
-                        className={`hover:bg-[#F7F8F6] transition-colors ${
-                          detailApt?.id === apt.id ? 'bg-[#EDF4F0]/60' : ''
+                        className={`hover:bg-[#F6F8F6] transition-colors ${
+                          detailApt?.id === apt.id ? 'bg-[#ECF4EF]/65' : ''
                         }`}
                       >
-                        <td className={`${cellPad} font-mono tabular-nums text-xs font-semibold text-[#0C291E]`}>
+                        <td className={`${cellPad} font-mono tabular-nums text-xs font-semibold text-[#0B261C]`}>
                           <button
                             type="button"
                             onClick={() => setDetailApt(apt)}
@@ -818,14 +940,14 @@ export function AppointmentsView({
                             {apt.id}
                           </button>
                         </td>
-                        <td className={`${cellPad} font-mono tabular-nums text-xs text-[#16211C] whitespace-nowrap`}>
+                        <td className={`${cellPad} font-mono tabular-nums text-xs text-[#111C17] whitespace-nowrap`}>
                           {apt.appointmentDate} · {apt.appointmentTime}
                         </td>
                         <td className={cellPad}>
                           {renderPatientLink(apt.patientName, apt.patientId)}
                         </td>
-                        <td className={`${cellPad} text-xs text-[#526058]`}>
-                          <span className="font-medium text-[#16211C]">{apt.department}</span>
+                        <td className={`${cellPad} text-xs text-[#526259]`}>
+                          <span className="font-medium text-[#111C17]">{apt.department}</span>
                           <span aria-hidden="true"> · </span>
                           <span>{apt.clinician}</span>
                         </td>
@@ -837,14 +959,14 @@ export function AppointmentsView({
                             <button
                               type="button"
                               onClick={() => setDetailApt(apt)}
-                              className="text-xs font-medium text-[#526058] hover:text-[#16211C]"
+                              className="text-xs font-medium text-[#526259] hover:text-[#111C17]"
                             >
                               Details
                             </button>
                             <button
                               type="button"
                               onClick={() => openEditModal(apt)}
-                              className="text-xs font-medium text-[#047857] hover:text-[#0C291E]"
+                              className="text-xs font-medium text-[#047857] hover:text-[#0B261C]"
                               aria-label={`Update or reschedule ${apt.id}`}
                             >
                               Reschedule
@@ -872,26 +994,33 @@ export function AppointmentsView({
           {detailApt && (
             <aside
               aria-label="Appointment detail panel"
-              className="lg:col-span-4 bg-white border border-[#E4E7E2] rounded-xl p-5 space-y-4"
+              className="lg:col-span-4 lg:sticky lg:top-20 card-surface rounded-xl p-5 space-y-4 animate-view-enter"
             >
-              <div className="flex items-start justify-between gap-2 border-b border-[#E4E7E2] pb-3">
-                <div>
-                  <span className="text-xs font-mono text-[#526058]">{detailApt.id}</span>
-                  <h3 className="text-base font-semibold text-[#16211C]">
-                    {onOpenPatient ? (
-                      <button
-                        type="button"
-                        onClick={() => onOpenPatient(detailApt.patientId)}
-                        className="text-left text-[#047857] hover:underline"
-                      >
-                        {detailApt.patientName}
-                      </button>
-                    ) : (
-                      detailApt.patientName
-                    )}
-                  </h3>
-                  <div className="mt-1">
-                    <AppointmentStatusText status={detailApt.status} />
+              <div className="flex items-start justify-between gap-2 border-b border-[#E3E8E4] pb-3">
+                <div className="flex items-start gap-3">
+                  <EditorialAvatar
+                    name={detailApt.patientName ?? detailApt.patientId}
+                    role="patient"
+                    size="md"
+                  />
+                  <div>
+                    <span className="text-xs font-mono text-[#526058]">{detailApt.id}</span>
+                    <h3 className="text-base font-semibold text-[#16211C]">
+                      {onOpenPatient ? (
+                        <button
+                          type="button"
+                          onClick={() => onOpenPatient(detailApt.patientId)}
+                          className="text-left text-[#047857] hover:underline"
+                        >
+                          {detailApt.patientName}
+                        </button>
+                      ) : (
+                        detailApt.patientName
+                      )}
+                    </h3>
+                    <div className="mt-1">
+                      <AppointmentStatusText status={detailApt.status} />
+                    </div>
                   </div>
                 </div>
                 <button
@@ -957,14 +1086,12 @@ export function AppointmentsView({
       )}
 
       {/* Create Appointment Modal */}
-      {showCreateModal && (
-        <div
-          className="fixed inset-0 z-50 bg-slate-950/50 flex items-center justify-center p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="create-apt-title"
-        >
-          <div className="bg-white border border-[#E4E7E2] rounded-xl w-full max-w-lg p-6 space-y-4 shadow-xl max-h-[90vh] overflow-y-auto">
+      <ModalShell
+        open={showCreateModal}
+        onClose={() => setShowCreateModal(false)}
+        labelledBy="create-apt-title"
+        maxWidthClass="max-w-lg"
+      >
             <div className="flex items-center justify-between">
               <h3 id="create-apt-title" className="text-base font-semibold text-[#16211C]">
                 Schedule Appointment
@@ -1095,25 +1222,23 @@ export function AppointmentsView({
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="px-4 py-2 text-sm font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg disabled:opacity-50"
+                  className="px-4 py-2 text-sm font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg disabled:opacity-50 btn-press"
                 >
                   {submitting ? 'Checking & Saving...' : 'Create Appointment'}
                 </button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
+      </ModalShell>
 
       {/* 2-Step Update / Reschedule Confirmation Modal */}
-      {editingApt && (
-        <div
-          className="fixed inset-0 z-50 bg-slate-950/50 flex items-center justify-center p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="edit-apt-title"
-        >
-          <div className="bg-white border border-[#E4E7E2] rounded-xl w-full max-w-xl p-6 space-y-4 shadow-xl max-h-[90vh] overflow-y-auto">
+      <ModalShell
+        open={Boolean(editingApt)}
+        onClose={() => setEditingApt(null)}
+        labelledBy="edit-apt-title"
+        maxWidthClass="max-w-xl"
+      >
+        {editingApt && (
+          <>
             <div className="flex items-center justify-between">
               <div>
                 <h3 id="edit-apt-title" className="text-base font-semibold text-[#16211C]">
@@ -1133,6 +1258,24 @@ export function AppointmentsView({
               >
                 <X className="w-4 h-4" aria-hidden="true" />
               </button>
+            </div>
+
+            <div className="flex items-center gap-2 text-[11px] font-medium text-[#526259] border-b border-[#EEF2EF] pb-3">
+              <span
+                className={
+                  rescheduleStep === 'edit' ? 'text-[#047857] font-semibold' : 'text-[#526259]'
+                }
+              >
+                1. Schedule &amp; Availability
+              </span>
+              <span aria-hidden="true">/</span>
+              <span
+                className={
+                  rescheduleStep === 'confirm' ? 'text-[#047857] font-semibold' : 'text-[#526259]'
+                }
+              >
+                2. Review &amp; Confirm
+              </span>
             </div>
 
             {editError && (
@@ -1413,26 +1556,26 @@ export function AppointmentsView({
                     type="button"
                     disabled={submitting}
                     onClick={persistAppointmentUpdate}
-                    className="px-4 py-2 text-sm font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg disabled:opacity-50"
+                    className="px-4 py-2 text-sm font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg disabled:opacity-50 btn-press"
                   >
                     {submitting ? 'Saving...' : 'Confirm & Save Reschedule'}
                   </button>
                 </div>
               </div>
             )}
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </ModalShell>
 
       {/* Explicit Cancel Confirmation Modal */}
-      {cancellingApt && (
-        <div
-          className="fixed inset-0 z-50 bg-slate-950/50 flex items-center justify-center p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="cancel-apt-title"
-        >
-          <div className="bg-white border border-[#E4E7E2] rounded-xl w-full max-w-md p-6 space-y-4 shadow-xl">
+      <ModalShell
+        open={Boolean(cancellingApt)}
+        onClose={() => setCancellingApt(null)}
+        labelledBy="cancel-apt-title"
+        maxWidthClass="max-w-md"
+      >
+        {cancellingApt && (
+          <>
             <h3 id="cancel-apt-title" className="text-base font-semibold text-[#16211C]">
               Confirm Appointment Cancellation
             </h3>
@@ -1453,14 +1596,14 @@ export function AppointmentsView({
                 type="button"
                 disabled={submitting}
                 onClick={handleConfirmCancel}
-                className="px-4 py-2 text-sm font-medium text-white bg-red-700 hover:bg-red-800 rounded-lg disabled:opacity-50"
+                className="px-4 py-2 text-sm font-medium text-white bg-red-700 hover:bg-red-800 rounded-lg disabled:opacity-50 btn-press"
               >
                 {submitting ? 'Cancelling...' : 'Confirm Cancellation'}
               </button>
             </div>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </ModalShell>
     </div>
   );
 }

@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Code2, Download, FileBarChart, FileSpreadsheet } from 'lucide-react';
+import { Code2, Download, FileBarChart, FileSpreadsheet, ShieldCheck } from 'lucide-react';
 import {
+  fetchAppointments,
   fetchDailyReport,
   fetchOpenApiDocs,
   fetchOverviewReport,
 } from '../client/api';
-import type { DailyReport, OverviewReport } from '../shared/types';
+import type { Appointment, DailyReport, OverviewReport } from '../shared/types';
+import { DepartmentLoadChart } from './AnalyticsCharts';
 import { AppointmentStatusText } from './StatusText';
 
 interface ReportsApiViewProps {
@@ -25,6 +27,7 @@ export function ReportsApiView({
   });
   const [daily, setDaily] = useState<DailyReport | null>(null);
   const [overview, setOverview] = useState<OverviewReport | null>(null);
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [docs, setDocs] = useState<{
     openapi: string;
     info: { title: string; version: string; description: string };
@@ -35,13 +38,15 @@ export function ReportsApiView({
   const loadReports = useCallback(async () => {
     setLoading(true);
     try {
-      const [dailyData, overviewData, openApiData] = await Promise.all([
+      const [dailyData, overviewData, allApts, openApiData] = await Promise.all([
         fetchDailyReport(selectedDate),
         fetchOverviewReport(),
+        fetchAppointments(),
         fetchOpenApiDocs(),
       ]);
       setDaily(dailyData);
       setOverview(overviewData);
+      setAppointments(allApts);
       setDocs(openApiData);
     } catch (err) {
       onErrorNotice(err instanceof Error ? err.message : 'Unable to load reports.');
@@ -93,22 +98,102 @@ export function ReportsApiView({
   };
 
   if (loading && !daily) {
-    return <div className="h-64 bg-white border border-[#E4E7E2] rounded-xl animate-pulse" />;
+    return (
+      <div className="space-y-6" aria-busy="true" aria-label="Loading operational reports">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="h-24 card-surface rounded-xl animate-pulse" />
+          ))}
+        </div>
+        <div className="h-72 card-surface rounded-xl animate-pulse" />
+      </div>
+    );
+  }
+
+  if (!daily || !overview) {
+    return (
+      <div className="card-surface rounded-xl p-8 text-center space-y-3">
+        <p className="text-sm font-medium text-[#111C17]">
+          Operational reports could not be loaded.
+        </p>
+        <p className="text-xs text-[#526259]">
+          Verify the local clinic API service is running and try again.
+        </p>
+        <button
+          type="button"
+          onClick={loadReports}
+          className="btn-press px-4 py-2 text-xs font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg"
+        >
+          Retry Loading Reports
+        </button>
+      </div>
+    );
   }
 
   return (
     <div className="space-y-6">
-      {/* Daily & Overview Reports */}
-      <section className="bg-white border border-[#E4E7E2] rounded-xl p-6 space-y-5">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#E4E7E2] pb-4">
+      {/* Executive Operational Summary Strip */}
+      {daily && overview && (
+        <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="bg-[#0B261C] text-white rounded-xl p-4">
+            <div className="text-xs font-medium text-emerald-200/80">Total Roster</div>
+            <div className="text-2xl font-bold font-mono tabular-nums mt-2">
+              {overview.totalPatients}
+            </div>
+            <div className="text-[11px] text-emerald-100/75 mt-1">
+              {overview.activePatients} active synthetic profiles
+            </div>
+          </div>
+
+          <div className="card-surface rounded-xl p-4">
+            <div className="text-xs font-medium text-[#526259]">
+              Visits on {daily.date.slice(5)}
+            </div>
+            <div className="text-2xl font-bold font-mono tabular-nums text-[#111C17] mt-2">
+              {daily.totalAppointments}
+            </div>
+            <div className="text-[11px] text-[#047857] mt-1 font-mono tabular-nums">
+              {daily.confirmedAppointments} confirmed · {daily.unconfirmedAppointments} unconfirmed
+            </div>
+          </div>
+
+          <div className="card-surface rounded-xl p-4">
+            <div className="text-xs font-medium text-[#526259]">Open Follow-up Queue</div>
+            <div className="text-2xl font-bold font-mono tabular-nums text-[#111C17] mt-2">
+              {overview.pendingFollowUpsCount}
+            </div>
+            <div className="text-[11px] text-[#526259] mt-1">
+              {overview.overdueFollowUpsCount} overdue · {overview.highPriorityFollowUpsCount} high priority
+            </div>
+          </div>
+
+          <div className="card-surface rounded-xl p-4">
+            <div className="text-xs font-medium text-[#526259]">Missed Visits (7d)</div>
+            <div
+              className={`text-2xl font-bold font-mono tabular-nums mt-2 ${
+                overview.missedLastSevenDaysCount > 0 ? 'text-[#DC2626]' : 'text-[#047857]'
+              }`}
+            >
+              {overview.missedLastSevenDaysCount}
+            </div>
+            <div className="text-[11px] text-[#526259] mt-1">
+              Across {appointments.length} total clinic records
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* Daily Summary + Department Volume & Confirmation Rate */}
+      <section className="card-surface rounded-xl p-6 space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#E3E8E4] pb-4">
           <div className="flex items-center gap-2.5">
             <FileBarChart className="w-5 h-5 text-[#047857]" aria-hidden="true" />
             <div>
-              <h2 className="text-base font-semibold text-[#16211C]">
-                Operational Reports
+              <h2 className="text-base font-semibold text-[#111C17]">
+                Operational Reports &amp; Exports
               </h2>
-              <p className="text-xs text-[#526058]">
-                Generated directly from live relational SQLite records
+              <p className="text-xs text-[#526259]">
+                Computed live from relational SQLite clinic records
               </p>
             </div>
           </div>
@@ -116,7 +201,7 @@ export function ReportsApiView({
           <div className="flex flex-wrap items-center gap-2.5">
             <label
               htmlFor="report-date-input"
-              className="text-xs font-medium text-[#526058] whitespace-nowrap"
+              className="text-xs font-medium text-[#526259] whitespace-nowrap"
             >
               Summary Date:
             </label>
@@ -125,12 +210,12 @@ export function ReportsApiView({
               type="date"
               value={selectedDate}
               onChange={(e) => setSelectedDate(e.target.value)}
-              className="px-3 py-1.5 text-sm border border-[#D4DDD6] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#059669]/25 focus:border-[#059669]"
+              className="px-3 py-1.5 text-sm font-mono border border-[#D4DDD6] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#059669]/25 focus:border-[#059669]"
             />
             <button
               type="button"
               onClick={handleDownloadCsv}
-              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[#16211C] bg-[#EDF4F0] hover:bg-[#DCECE3] rounded-lg transition-colors whitespace-nowrap shrink-0"
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[#0B261C] bg-[#ECF4EF] hover:bg-[#DCECE3] rounded-lg transition-colors whitespace-nowrap shrink-0"
             >
               <FileSpreadsheet className="w-3.5 h-3.5 text-[#047857]" aria-hidden="true" />
               Export CSV
@@ -138,7 +223,7 @@ export function ReportsApiView({
             <button
               type="button"
               onClick={handleDownloadJson}
-              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[#16211C] bg-[#F7F8F6] hover:bg-[#EDF4F0] border border-[#E4E7E2] rounded-lg transition-colors whitespace-nowrap shrink-0"
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[#111C17] bg-[#F6F8F6] hover:bg-[#ECF4EF] border border-[#E3E8E4] rounded-lg transition-colors whitespace-nowrap shrink-0"
             >
               <Download className="w-3.5 h-3.5 text-[#047857]" aria-hidden="true" />
               Export JSON
@@ -147,119 +232,154 @@ export function ReportsApiView({
         </div>
 
         {daily && overview && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div>
-              <h3 className="text-sm font-semibold text-[#16211C] mb-3">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            <div className="lg:col-span-5 space-y-3">
+              <h3 className="text-sm font-semibold text-[#111C17]">
                 Daily Status Breakdown ({daily.date})
               </h3>
-              <div className="border border-[#E4E7E2] rounded-lg divide-y divide-[#E4E7E2] text-sm overflow-hidden">
-                <div className="px-4 py-2.5 flex justify-between">
-                  <span className="text-[#526058]">Total Appointments</span>
-                  <span className="font-mono tabular-nums font-semibold text-[#16211C]">
+              <div className="divide-y divide-[#E3E8E4] border-y border-[#E3E8E4] text-sm">
+                <div className="py-2.5 flex justify-between">
+                  <span className="text-[#526259]">Total Appointments</span>
+                  <span className="font-mono tabular-nums font-semibold text-[#111C17]">
                     {daily.totalAppointments}
                   </span>
                 </div>
                 {Object.entries(daily.statusBreakdown).map(([status, count]) => (
-                  <div key={status} className="px-4 py-2.5 flex justify-between">
-                    <span className="text-[#526058]">{status}</span>
-                    <span className="font-mono tabular-nums font-medium text-[#16211C]">
+                  <div key={status} className="py-2.5 flex justify-between">
+                    <span className="text-[#526259]">{status}</span>
+                    <span className="font-mono tabular-nums font-medium text-[#111C17]">
                       {count}
                     </span>
                   </div>
                 ))}
-                <div className="px-4 py-2.5 flex justify-between bg-[#EDF4F0]/60">
-                  <span className="text-[#16211C] font-medium">Clinic Open Follow-ups</span>
-                  <span className="font-mono tabular-nums font-semibold text-[#0C291E]">
+                <div className="py-2.5 px-2.5 -mx-2.5 flex justify-between bg-[#ECF4EF]/65 rounded-md">
+                  <span className="text-[#111C17] font-medium">Clinic Open Follow-ups</span>
+                  <span className="font-mono tabular-nums font-semibold text-[#0B261C]">
                     {daily.pendingFollowUps}
                   </span>
                 </div>
               </div>
             </div>
 
-            <div>
-              <h3 className="text-sm font-semibold text-[#16211C] mb-3">
-                Missed Appointments (Last 7 Days · {overview.missedLastSevenDaysCount})
-              </h3>
-              {overview.missedLastSevenDays.length === 0 ? (
-                <p className="text-xs text-[#526058] p-4 border border-[#E4E7E2] rounded-lg">
-                  No missed appointments recorded in the last seven days.
-                </p>
-              ) : (
-                <div className="border border-[#E4E7E2] rounded-lg overflow-x-auto max-w-full">
-                  <table className="w-full min-w-[480px] text-left border-collapse text-xs">
-                    <thead>
-                      <tr className="border-b border-[#E4E7E2] bg-[#F7F8F6] text-[#526058]">
-                        <th className="py-2 px-3 whitespace-nowrap">Date</th>
-                        <th className="py-2 px-3">Patient</th>
-                        <th className="py-2 px-3">Department</th>
-                        <th className="py-2 px-3 whitespace-nowrap">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-[#E4E7E2]">
-                      {overview.missedLastSevenDays.map((m) => (
-                        <tr key={m.id}>
-                          <td className="py-2 px-3 font-mono tabular-nums text-[#2E3C34] whitespace-nowrap">
-                            {m.appointmentDate} {m.appointmentTime}
-                          </td>
-                          <td className="py-2 px-3">
-                            <span className="font-medium text-[#16211C]">{m.patientName}</span>
-                            <span className="font-mono text-[#526058]"> · {m.patientId}</span>
-                          </td>
-                          <td className="py-2 px-3 text-[#526058] whitespace-nowrap">
-                            {m.department}
-                          </td>
-                          <td className="py-2 px-3 whitespace-nowrap">
-                            <AppointmentStatusText status={m.status} />
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+            <div className="lg:col-span-7 space-y-3 lg:pl-6 lg:border-l lg:border-[#E3E8E4]">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold text-[#111C17]">
+                  Department Volume &amp; Confirmation Rate
+                </h3>
+                <span className="text-[11px] font-mono text-[#526259]">
+                  All scheduled history
+                </span>
+              </div>
+              <DepartmentLoadChart appointments={appointments} />
             </div>
           </div>
         )}
       </section>
 
-      {/* REST API Reference & Synapse Readiness */}
-      <section className="bg-white border border-[#E4E7E2] rounded-xl p-6 space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#E4E7E2] pb-4">
-          <div className="flex items-center gap-2.5">
-            <Code2 className="w-5 h-5 text-[#0C291E]" aria-hidden="true" />
+      {/* Missed Appointments 7-Day Table */}
+      {overview && (
+        <section className="card-surface rounded-xl overflow-hidden">
+          <div className="px-6 py-4 border-b border-[#E3E8E4] flex items-center justify-between gap-3">
             <div>
-              <h2 className="text-base font-semibold text-[#16211C]">
+              <h2 className="text-base font-semibold text-[#111C17]">
+                Missed Appointments (Last 7 Days)
+              </h2>
+              <p className="text-xs text-[#526259] mt-0.5">
+                Patients flagged for rescheduling outreach and follow-up tracking
+              </p>
+            </div>
+            <span className="text-xs font-mono tabular-nums text-[#526259]">
+              {overview.missedLastSevenDaysCount} record
+              {overview.missedLastSevenDaysCount === 1 ? '' : 's'}
+            </span>
+          </div>
+
+          {overview.missedLastSevenDays.length === 0 ? (
+            <p className="text-xs text-[#526259] p-6">
+              No missed appointments recorded in the last seven days.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[540px] text-left border-collapse text-xs">
+                <thead>
+                  <tr className="border-b border-[#E3E8E4] bg-[#F6F8F6] text-[#526259]">
+                    <th className="py-2.5 px-6 whitespace-nowrap">Appointment</th>
+                    <th className="py-2.5 px-4 whitespace-nowrap">Date · Time</th>
+                    <th className="py-2.5 px-4">Patient</th>
+                    <th className="py-2.5 px-4">Department · Clinician</th>
+                    <th className="py-2.5 px-6 whitespace-nowrap">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#EEF2EF]">
+                  {overview.missedLastSevenDays.map((m) => (
+                    <tr key={m.id} className="hover:bg-[#F6F8F6] transition-colors">
+                      <td className="py-2.5 px-6 font-mono font-semibold text-[#0B261C] whitespace-nowrap">
+                        {m.id}
+                      </td>
+                      <td className="py-2.5 px-4 font-mono tabular-nums text-[#34433B] whitespace-nowrap">
+                        {m.appointmentDate} {m.appointmentTime}
+                      </td>
+                      <td className="py-2.5 px-4">
+                        <span className="font-medium text-[#111C17]">{m.patientName}</span>
+                        <span className="font-mono text-[#526259]"> · {m.patientId}</span>
+                      </td>
+                      <td className="py-2.5 px-4 text-[#526259] whitespace-nowrap">
+                        {m.department} · {m.clinician}
+                      </td>
+                      <td className="py-2.5 px-6 whitespace-nowrap">
+                        <AppointmentStatusText status={m.status} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* REST API Reference & Synapse Readiness */}
+      <section className="card-surface rounded-xl overflow-hidden">
+        <div className="px-6 py-4 border-b border-[#E3E8E4] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <Code2 className="w-5 h-5 text-[#0B261C]" aria-hidden="true" />
+            <div>
+              <h2 className="text-base font-semibold text-[#111C17]">
                 REST API Reference &amp; Synapse CLI Readiness
               </h2>
-              <p className="text-xs text-[#526058]">
-                OpenAPI {docs?.openapi ?? '3.0.3'} available at{' '}
-                <code className="font-mono text-[#16211C]">GET /api/docs</code> · Core endpoints isolated from agent orchestration
+              <p className="text-xs text-[#526259]">
+                OpenAPI {docs?.openapi ?? '3.0.3'} served live at{' '}
+                <code className="font-mono text-[#111C17]">GET /api/docs</code> · Core routes isolated from agent orchestration
               </p>
             </div>
           </div>
+          <div className="inline-flex items-center gap-1.5 text-xs font-medium text-[#047857] shrink-0">
+            <ShieldCheck className="w-4 h-4" aria-hidden="true" />
+            <span>Synapse MCP Pending</span>
+          </div>
         </div>
 
-        <div className="overflow-x-auto border border-[#E4E7E2] rounded-lg">
+        <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
-              <tr className="border-b border-[#E4E7E2] bg-[#F7F8F6] text-[#526058]">
-                <th className="py-2.5 px-4">Method</th>
+              <tr className="border-b border-[#E3E8E4] bg-[#F6F8F6] text-[#526259]">
+                <th className="py-2.5 px-6">Method</th>
                 <th className="py-2.5 px-4">Endpoint</th>
-                <th className="py-2.5 px-4">Operation Summary</th>
+                <th className="py-2.5 px-6">Operation Summary</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[#E4E7E2]">
+            <tbody className="divide-y divide-[#EEF2EF]">
               {docs &&
                 Object.entries(docs.paths).flatMap(([routePath, methods]) =>
                   Object.entries(methods).map(([method, op]) => (
-                    <tr key={`${method}-${routePath}`}>
-                      <td className="py-2.5 px-4 font-mono font-semibold uppercase text-[#047857]">
+                    <tr key={`${method}-${routePath}`} className="hover:bg-[#F6F8F6]">
+                      <td className="py-2.5 px-6 font-mono font-semibold uppercase text-[#047857]">
                         {method}
                       </td>
-                      <td className="py-2.5 px-4 font-mono text-[#16211C]">
+                      <td className="py-2.5 px-4 font-mono text-[#111C17]">
                         /api{routePath}
                       </td>
-                      <td className="py-2.5 px-4 text-[#526058]">{op.summary}</td>
+                      <td className="py-2.5 px-6 text-[#526259]">{op.summary}</td>
                     </tr>
                   ))
                 )}

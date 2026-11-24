@@ -308,3 +308,36 @@ test('Patient registration, conflict-checked booking, follow-up updates, and P-1
     assert.equal(matchedFu.status, 'Completed');
   });
 });
+
+test('POST /api/assistant/stream emits real SSE tool progress and structured briefing response', async () => {
+  await withTestServer(async (baseUrl) => {
+    const emptyRes = await fetch(`${baseUrl}/api/assistant/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: '   ' }),
+    });
+    assert.equal(emptyRes.status, 400);
+
+    const streamRes = await fetch(`${baseUrl}/api/assistant/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: "Give me today's clinic briefing." }),
+    });
+    assert.equal(streamRes.status, 200);
+    assert.ok(streamRes.headers.get('content-type')?.includes('text/event-stream'));
+
+    const raw = await streamRes.text();
+    const events = raw
+      .split('\n\n')
+      .map((block) => block.trim())
+      .filter(Boolean)
+      .map((block) => JSON.parse(block.replace(/^data:\s*/, '')) as { type: string; response?: { intent: string; sections?: unknown[] } });
+
+    assert.ok(events.some((e) => e.type === 'tool_start'));
+    assert.ok(events.some((e) => e.type === 'tool_done'));
+    const complete = events.find((e) => e.type === 'complete');
+    assert.ok(complete?.response);
+    assert.equal(complete.response.intent, 'daily_briefing');
+    assert.equal(complete.response.sections?.length, 5);
+  });
+});

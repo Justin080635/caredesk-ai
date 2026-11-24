@@ -102,6 +102,58 @@ export function createExpressApp(db: DatabaseSync) {
     }
   });
 
+  app.post('/api/assistant/stream', async (req, res) => {
+    const prompt = typeof req.body?.prompt === 'string' ? req.body.prompt.trim() : '';
+    if (!prompt) {
+      res.status(400).json({
+        error: { code: 'VALIDATION_ERROR', message: 'Please enter an operational question or request.' },
+      });
+      return;
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+
+    const abortController = new AbortController();
+    let closed = false;
+    res.on('close', () => {
+      if (!res.writableEnded) {
+        closed = true;
+        abortController.abort();
+      }
+    });
+
+    const writeEvent = (event: unknown) => {
+      if (closed || res.writableEnded) return;
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+    };
+
+    try {
+      const agent = new CareDeskAgent(createLocalRestPreviewAdapter(db, 'CareDesk Assistant'));
+      await agent.handlePrompt(prompt, {
+        signal: abortController.signal,
+        onEvent: (event) => writeEvent(event),
+      });
+      if (!closed && !res.writableEnded) {
+        res.end();
+      }
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        if (!res.writableEnded) res.end();
+        return;
+      }
+      const code = err instanceof ServiceError ? err.code : 'ASSISTANT_ERROR';
+      const message =
+        err instanceof Error ? err.message : 'Unable to process assistant request.';
+      writeEvent({ type: 'error', code, message });
+      if (!res.writableEnded) {
+        res.end();
+      }
+    }
+  });
+
   app.post('/api/assistant/confirm', requireAdministrator, async (req: AuthenticatedRequest, res) => {
     try {
       const actionType = req.body?.actionType;

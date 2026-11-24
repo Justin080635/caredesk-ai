@@ -1,14 +1,15 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  AlertTriangle,
   ArrowRight,
+  ArrowUpRight,
   Calendar as CalendarIcon,
   Check,
-  CheckCircle2,
   ClipboardList,
   Clock,
   RefreshCw,
-  TrendingUp,
+  Send,
+  Stethoscope,
+  UserPlus,
   Users,
 } from 'lucide-react';
 import {
@@ -17,8 +18,19 @@ import {
   fetchOverviewReport,
   updateAppointmentRecord,
 } from '../client/api';
+import { CLINIC_CLINICIANS } from '../shared/constants';
 import type { Appointment, DailyReport, OverviewReport } from '../shared/types';
+import {
+  AppointmentActivityChart,
+  PatientCohortChart,
+  StatusDonutChart,
+} from './AnalyticsCharts';
 import { ClinicCalendar } from './ClinicCalendar';
+import {
+  ClinicEmptyIllustration,
+  DashboardOpsSpotIllustration,
+  EditorialAvatar,
+} from './ClinicIllustrations';
 import { AppointmentStatusText } from './StatusText';
 
 export interface DashboardFilteredTarget {
@@ -34,6 +46,10 @@ interface DashboardViewProps {
     tab: 'assistant' | 'patients' | 'appointments' | 'followups' | 'reports'
   ) => void;
   onNavigateToFiltered?: (target: DashboardFilteredTarget) => void;
+  onQuickRegisterPatient?: () => void;
+  onQuickScheduleAppointment?: () => void;
+  onLaunchAssistantPrompt?: (prompt: string) => void;
+  actorName?: string;
   onErrorNotice: (msg: string) => void;
   onSuccessNotice: (msg: string) => void;
   refreshSignal: number;
@@ -45,9 +61,27 @@ function getLocalTodayKey(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+function getGreetingPrefix(): string {
+  const hr = new Date().getHours();
+  if (hr < 12) return 'Good morning';
+  if (hr < 17) return 'Good afternoon';
+  return 'Good evening';
+}
+
+const QUICK_ASSISTANT_PROMPTS = [
+  "Give me today's clinic briefing.",
+  'Which appointments are still unconfirmed?',
+  'Identify patients who missed appointments during the last seven days.',
+  'Find the next available appointment slot.',
+];
+
 export function DashboardView({
   onNavigate,
   onNavigateToFiltered,
+  onQuickRegisterPatient,
+  onQuickScheduleAppointment,
+  onLaunchAssistantPrompt,
+  actorName = 'Clinic Administrator',
   onErrorNotice,
   onSuccessNotice,
   refreshSignal,
@@ -55,10 +89,11 @@ export function DashboardView({
 }: DashboardViewProps) {
   const [daily, setDaily] = useState<DailyReport | null>(null);
   const [overview, setOverview] = useState<OverviewReport | null>(null);
-  const [activeDate, setActiveDate] = useState<string>(getLocalTodayKey);
   const [calendarDayAppointments, setCalendarDayAppointments] = useState<Appointment[]>([]);
+  const [activeDate, setActiveDate] = useState<string>(getLocalTodayKey);
   const [loading, setLoading] = useState(true);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [assistantQuickInput, setAssistantQuickInput] = useState('');
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -109,17 +144,39 @@ export function DashboardView({
     }
   };
 
+  const handleQuickAssistantSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = assistantQuickInput.trim();
+    if (!trimmed) return;
+    if (onLaunchAssistantPrompt) {
+      onLaunchAssistantPrompt(trimmed);
+    } else {
+      onNavigate('assistant');
+    }
+  };
+
+  const activeCliniciansToday = useMemo(() => {
+    const names = new Set<string>();
+    for (const apt of calendarDayAppointments) {
+      if (apt.status !== 'Cancelled' && apt.clinician) {
+        names.add(apt.clinician);
+      }
+    }
+    return Array.from(names);
+  }, [calendarDayAppointments]);
+
   if (loading && !daily) {
     return (
       <div className="space-y-6" aria-busy="true" aria-label="Loading operations dashboard">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-          {Array.from({ length: 5 }).map((_, idx) => (
-            <div key={idx} className="h-28 bg-white border border-[#E4E7E2] rounded-xl animate-pulse" />
+        <div className="h-20 bg-white border border-[#E3E8E4] rounded-xl animate-pulse" />
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {Array.from({ length: 4 }).map((_, idx) => (
+            <div key={idx} className="h-36 bg-white border border-[#E3E8E4] rounded-xl animate-pulse" />
           ))}
         </div>
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2 h-80 bg-white border border-[#E4E7E2] rounded-xl animate-pulse" />
-          <div className="h-80 bg-white border border-[#E4E7E2] rounded-xl animate-pulse" />
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          <div className="lg:col-span-7 h-80 bg-white border border-[#E3E8E4] rounded-xl animate-pulse" />
+          <div className="lg:col-span-5 h-80 bg-white border border-[#E3E8E4] rounded-xl animate-pulse" />
         </div>
       </div>
     );
@@ -127,12 +184,12 @@ export function DashboardView({
 
   if (!daily || !overview) {
     return (
-      <div className="bg-white border border-[#E4E7E2] rounded-xl p-8 text-center">
-        <p className="text-sm text-[#526058] mb-4">Operational metrics could not be retrieved.</p>
+      <div className="card-surface rounded-xl p-8 text-center">
+        <p className="text-sm text-[#526259] mb-4">Operational metrics could not be retrieved.</p>
         <button
           type="button"
           onClick={loadData}
-          className="px-4 py-2 text-sm font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg transition-colors"
+          className="btn-press px-4 py-2 text-sm font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg"
         >
           Retry Loading Metrics
         </button>
@@ -140,493 +197,457 @@ export function DashboardView({
     );
   }
 
-  const maxTrendTotal = Math.max(1, ...overview.dailyTrend.map((d) => d.total));
-  const maxRegCount = Math.max(1, ...overview.patientRegistrationTrend.map((r) => r.count));
-  const totalWindowApts = Math.max(1, overview.totalAppointmentsInWindow);
   const deltaVsYesterday = overview.todayTotalAppointments - overview.yesterdayTotalAppointments;
   const isViewingToday = activeDate === overview.todayDate;
+  const confirmationPct =
+    daily.totalAppointments > 0
+      ? Math.round((daily.confirmedAppointments / daily.totalAppointments) * 100)
+      : 0;
+  const completionPct =
+    daily.totalAppointments > 0
+      ? Math.round(
+          ((daily.confirmedAppointments + daily.completedAppointments) / daily.totalAppointments) *
+            100
+        )
+      : 0;
+  const activePatientPct =
+    overview.totalPatients > 0
+      ? Math.round((overview.activePatients / overview.totalPatients) * 100)
+      : 0;
 
-  const kpis: Array<{
-    id: string;
-    label: string;
-    value: number;
-    icon: typeof Users;
-    description: string;
-    trend: string;
-    accentClass: string;
-    iconBg: string;
-    target: DashboardFilteredTarget;
-  }> = [
-    {
-      id: 'kpi-total-patients',
-      label: 'Total Patients',
-      value: overview.totalPatients,
-      icon: Users,
-      description: `${overview.activePatients} active patient records`,
-      trend: 'View directory →',
-      accentClass: 'text-[#0C291E]',
-      iconBg: 'bg-[#EDF4F0] text-[#047857]',
-      target: { tab: 'patients', status: 'All' },
-    },
-    {
-      id: 'kpi-total-appointments',
-      label: isViewingToday ? "Today's Appointments" : `Appointments (${activeDate.slice(5)})`,
-      value: daily.totalAppointments,
-      icon: CalendarIcon,
-      description: `${daily.upcomingAppointments.length} remaining · ${daily.completedAppointments} done`,
-      trend: isViewingToday
-        ? deltaVsYesterday === 0
-          ? 'Same as yesterday'
-          : `${deltaVsYesterday > 0 ? '+' : ''}${deltaVsYesterday} vs yesterday`
-        : `Date ${activeDate} →`,
-      accentClass: 'text-[#0C291E]',
-      iconBg: 'bg-[#EDF4F0] text-[#047857]',
-      target: { tab: 'appointments', date: activeDate, status: 'All' },
-    },
-    {
-      id: 'kpi-confirmed-appointments',
-      label: 'Confirmed Appointments',
-      value: daily.confirmedAppointments,
-      icon: CheckCircle2,
-      description: `${daily.unconfirmedAppointments} awaiting confirmation`,
-      trend:
-        daily.totalAppointments > 0
-          ? `${Math.round((daily.confirmedAppointments / daily.totalAppointments) * 100)}% of ${isViewingToday ? 'today' : activeDate.slice(5)}`
-          : '0% confirmed',
-      accentClass: 'text-[#047857]',
-      iconBg: 'bg-emerald-50 text-[#059669]',
-      target: { tab: 'appointments', date: activeDate, status: 'Confirmed' },
-    },
-    {
-      id: 'kpi-pending-followups',
-      label: 'Pending Follow-ups',
-      value: overview.pendingFollowUpsCount,
-      icon: ClipboardList,
-      description: `${overview.highPriorityFollowUpsCount} high priority tasks`,
-      trend:
-        overview.overdueFollowUpsCount > 0
-          ? `${overview.overdueFollowUpsCount} overdue`
-          : 'None overdue',
-      accentClass: 'text-[#16211C]',
-      iconBg: 'bg-amber-50 text-amber-700',
-      target: { tab: 'followups', followUpView: 'pending' },
-    },
-    {
-      id: 'kpi-missed-appointments',
-      label: 'Missed Appointments',
-      value: overview.missedLastSevenDaysCount,
-      icon: AlertTriangle,
-      description: `${daily.missedAppointments} missed on ${activeDate.slice(5)}`,
-      trend: 'Last 7 days window →',
-      accentClass: overview.missedLastSevenDaysCount > 0 ? 'text-red-700' : 'text-[#047857]',
-      iconBg: 'bg-red-50 text-red-700',
-      target: { tab: 'appointments', status: 'Missed', date: '' },
-    },
-  ];
-
-  const rowPad = compactDensity ? 'py-2 px-4' : 'py-3 px-4';
+  const rowPad = compactDensity ? 'py-2.5 px-4' : 'py-3.5 px-5';
 
   return (
     <div className="space-y-6">
-      {/* Copilot Banner */}
-      <section className="bg-[#0C291E] text-white rounded-xl p-6 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+      {/* Section 1: Contextual Welcome Header & Command Actions */}
+      <section className="flex flex-col xl:flex-row xl:items-end justify-between gap-4 pb-1">
         <div className="space-y-1">
-          <p className="text-xs font-medium text-emerald-300">
-            CareDesk Operations Intelligence · Local REST Preview
-          </p>
-          <h2 className="text-lg sm:text-xl font-semibold tracking-tight text-balance">
-            Less time managing healthcare administration. More time delivering healthcare.
+          <div className="flex flex-wrap items-center gap-2 text-xs text-[#526259]">
+            <span className="font-medium text-[#047857]">Facility Operations Overview</span>
+            <span aria-hidden="true">·</span>
+            <span className="font-mono tabular-nums">{daily.date}</span>
+            {isViewingToday && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className="text-[#111C17] font-medium">Today&apos;s Live Schedule</span>
+              </>
+            )}
+          </div>
+          <h2 className="text-2xl sm:text-[26px] font-bold tracking-tight text-[#111C17] text-balance">
+            {getGreetingPrefix()}, {actorName}
           </h2>
-          <p className="text-xs sm:text-sm text-emerald-100/80">
-            {daily.unconfirmedAppointments} unconfirmed visits on {daily.date}, {overview.overdueFollowUpsCount} overdue follow-ups, and {overview.missedLastSevenDaysCount} missed visits in the past 7 days need review.
+          <p className="text-sm text-[#526259] max-w-3xl">
+            {daily.totalAppointments} appointment{daily.totalAppointments === 1 ? '' : 's'} on{' '}
+            <span className="font-mono text-[#111C17] font-medium">{daily.date}</span>
+            <span aria-hidden="true"> · </span>
+            {daily.unconfirmedAppointments} awaiting confirmation
+            <span aria-hidden="true"> · </span>
+            {overview.overdueFollowUpsCount} overdue follow-up{overview.overdueFollowUpsCount === 1 ? '' : 's'}.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => onNavigate('assistant')}
-          className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium bg-[#059669] hover:bg-[#047857] text-white rounded-lg transition-colors whitespace-nowrap shrink-0 self-start lg:self-auto"
-        >
-          Ask CareDesk Assistant
-          <ArrowRight className="w-4 h-4" aria-hidden="true" />
-        </button>
-      </section>
 
-      {/* Operations Date Filter Bar */}
-      <div className="bg-white border border-[#E4E7E2] rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-xs text-[#526058]">
-          <CalendarIcon className="w-4 h-4 text-[#047857]" aria-hidden="true" />
-          <span className="font-medium text-[#16211C]">Operations Date Focus:</span>
-          <span className="font-mono text-[#0C291E] font-semibold">{activeDate}</span>
-          {isViewingToday && (
-            <span className="text-[11px] font-medium text-[#047857] bg-[#EDF4F0] px-2 py-0.5 rounded">
-              Today
-            </span>
-          )}
-        </div>
-        <div className="flex flex-wrap items-center gap-2.5">
-          <label htmlFor="dashboard-date-filter" className="text-xs text-[#526058]">
-            Inspect Date:
-          </label>
-          <input
-            id="dashboard-date-filter"
-            type="date"
-            value={activeDate}
-            onChange={(e) => handleSelectDate(e.target.value)}
-            className="px-2.5 py-1.5 text-xs border border-[#D4DAD4] rounded-lg bg-white"
-          />
-          {!isViewingToday && (
-            <button
-              type="button"
-              onClick={() => setActiveDate(overview.todayDate)}
-              className="px-2.5 py-1.5 text-xs font-medium text-[#047857] bg-[#EDF4F0] hover:bg-[#D7E6DD] rounded-lg transition-colors"
-            >
-              Reset to Today
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* 5 Clickable Core KPI Cards */}
-      <section aria-label="Operational Key Performance Indicators">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-          {kpis.map((kpi) => {
-            const Icon = kpi.icon;
-            return (
-              <button
-                key={kpi.id}
-                type="button"
-                data-testid={kpi.id}
-                onClick={() => navigateTarget(kpi.target)}
-                className="text-left bg-white border border-[#E4E7E2] hover:border-[#059669] hover:bg-[#FAFDFB] rounded-xl p-4 flex flex-col justify-between transition-colors group"
-              >
-                <div className="flex items-center justify-between gap-2 w-full">
-                  <span className="text-xs font-medium text-[#526058] group-hover:text-[#0C291E]">
-                    {kpi.label}
-                  </span>
-                  <div className={`p-2 rounded-lg ${kpi.iconBg}`}>
-                    <Icon className="w-4 h-4" aria-hidden="true" />
-                  </div>
-                </div>
-                <div className={`text-2xl font-bold font-mono tabular-nums mt-3 ${kpi.accentClass}`}>
-                  {kpi.value}
-                </div>
-                <div className="mt-2 pt-2 border-t border-[#F0F2EF] space-y-0.5 w-full">
-                  <div className="text-xs text-[#16211C]">{kpi.description}</div>
-                  <div className="text-[11px] font-mono text-[#526058] group-hover:text-[#047857]">
-                    {kpi.trend}
-                  </div>
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      </section>
-
-      {/* Analytics Row: Appointment Trends + Status Distribution + Patient Registrations */}
-      <section className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Appointment Trends */}
-        <div className="lg:col-span-7 bg-white border border-[#E4E7E2] rounded-xl p-6 flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between gap-4 mb-4">
-              <div>
-                <h3 className="text-base font-semibold text-[#16211C]">
-                  Appointment Volume &amp; Status Trends
-                </h3>
-                <p className="text-xs text-[#526058] mt-0.5">
-                  {overview.windowStart} to {overview.windowEnd} · Click any day bar to inspect schedule
-                </p>
-              </div>
+        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+          <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-white border border-[#E3E8E4] rounded-lg">
+            <label htmlFor="dashboard-date-filter" className="text-xs font-medium text-[#526259]">
+              Focus Date
+            </label>
+            <input
+              id="dashboard-date-filter"
+              type="date"
+              value={activeDate}
+              onChange={(e) => handleSelectDate(e.target.value)}
+              className="text-xs font-mono text-[#111C17] bg-transparent border-0 p-0 focus:outline-none"
+            />
+            {!isViewingToday && (
               <button
                 type="button"
-                onClick={loadData}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#526058] hover:text-[#16211C] border border-[#E4E7E2] rounded-lg transition-colors whitespace-nowrap shrink-0"
-                aria-label="Refresh operational analytics"
+                onClick={() => setActiveDate(overview.todayDate)}
+                className="text-[11px] font-medium text-[#047857] hover:underline whitespace-nowrap"
               >
-                <RefreshCw className="w-3.5 h-3.5" aria-hidden="true" />
-                Refresh
+                Today
               </button>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-4 text-xs text-[#526058] mb-4">
-              <span className="inline-flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-sm bg-[#047857]" aria-hidden="true" />
-                Completed / Confirmed
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-sm bg-amber-500" aria-hidden="true" />
-                Scheduled
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-sm bg-red-600" aria-hidden="true" />
-                Missed
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-sm bg-slate-300" aria-hidden="true" />
-                Cancelled
-              </span>
-            </div>
-
-            <div className="grid grid-cols-8 gap-2.5 items-end h-44 pt-2 border-b border-[#E4E7E2] pb-2">
-              {overview.dailyTrend.map((day) => {
-                const positive = day.completed + day.confirmed;
-                const positiveH = Math.round((positive / maxTrendTotal) * 120);
-                const schedH = Math.round((day.scheduled / maxTrendTotal) * 120);
-                const missedH = Math.round((day.missed / maxTrendTotal) * 120);
-                const cancelH = Math.round((day.cancelled / maxTrendTotal) * 120);
-                const isSelected = day.date === activeDate;
-                const isToday = day.date === overview.todayDate;
-
-                return (
-                  <button
-                    key={day.date}
-                    type="button"
-                    onClick={() => handleSelectDate(day.date)}
-                    className={`flex flex-col items-center gap-1.5 h-full justify-end rounded-md py-1 transition-colors ${
-                      isSelected ? 'bg-[#EDF4F0]/80' : 'hover:bg-[#F7F8F6]'
-                    }`}
-                    title={`${day.date}: ${day.total} total (${day.confirmed} confirmed, ${day.scheduled} scheduled, ${day.missed} missed)`}
-                    aria-label={`Inspect clinic operations for ${day.date} (${day.total} appointments)`}
-                  >
-                    <span className="text-xs font-mono tabular-nums text-[#526058]">
-                      {day.total}
-                    </span>
-                    <div className="w-full max-w-[36px] flex flex-col-reverse rounded-sm overflow-hidden bg-[#F1F4F1]">
-                      {positiveH > 0 && (
-                        <div
-                          style={{ height: `${positiveH}px` }}
-                          className="bg-[#047857] w-full transition-all duration-300"
-                        />
-                      )}
-                      {schedH > 0 && (
-                        <div
-                          style={{ height: `${schedH}px` }}
-                          className="bg-amber-500 w-full transition-all duration-300"
-                        />
-                      )}
-                      {missedH > 0 && (
-                        <div
-                          style={{ height: `${missedH}px` }}
-                          className="bg-red-600 w-full transition-all duration-300"
-                        />
-                      )}
-                      {cancelH > 0 && (
-                        <div
-                          style={{ height: `${cancelH}px` }}
-                          className="bg-slate-300 w-full transition-all duration-300"
-                        />
-                      )}
-                    </div>
-                    <span
-                      className={`text-[11px] font-mono tabular-nums ${
-                        isSelected || isToday ? 'font-bold text-[#0C291E]' : 'text-[#526058]'
-                      }`}
-                    >
-                      {day.date.slice(5)}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
+            )}
           </div>
 
-          {/* Status Distribution Horizontal Bar */}
-          <div className="mt-5 pt-4 border-t border-[#E4E7E2] space-y-2.5">
-            <div className="flex items-center justify-between text-xs">
-              <span className="font-medium text-[#16211C]">
-                Status Distribution ({overview.totalAppointmentsInWindow} window visits)
+          <button
+            type="button"
+            onClick={() =>
+              onQuickRegisterPatient
+                ? onQuickRegisterPatient()
+                : navigateTarget({ tab: 'patients', status: 'All' })
+            }
+            className="btn-press inline-flex items-center gap-2 px-4 py-2 text-xs sm:text-sm font-medium text-[#0B261C] bg-white hover:bg-[#ECF4EF] border border-[#D4E4DA] rounded-lg whitespace-nowrap shrink-0"
+          >
+            <UserPlus className="w-4 h-4 text-[#047857]" aria-hidden="true" />
+            Register Patient
+          </button>
+
+          <button
+            type="button"
+            onClick={() =>
+              onQuickScheduleAppointment
+                ? onQuickScheduleAppointment()
+                : navigateTarget({ tab: 'appointments', date: activeDate })
+            }
+            className="btn-press inline-flex items-center gap-2 px-4 py-2 text-xs sm:text-sm font-medium text-white bg-[#0B261C] hover:bg-[#12382A] rounded-lg whitespace-nowrap shrink-0"
+          >
+            <CalendarIcon className="w-4 h-4 text-emerald-300" aria-hidden="true" />
+            New Appointment
+          </button>
+        </div>
+      </section>
+
+      {/* Section 2: 4 Core Operational KPI Cards */}
+      <section aria-label="Operational Key Performance Indicators">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* 1. Today's Appointments (Focal Anchor Card) */}
+          <button
+            type="button"
+            data-testid="kpi-total-appointments"
+            onClick={() =>
+              navigateTarget({ tab: 'appointments', date: activeDate, status: 'All' })
+            }
+            className="btn-press text-left bg-[#0B261C] hover:bg-[#12382A] text-white rounded-xl p-5 flex flex-col justify-between transition-colors group shadow-xs"
+          >
+            <div className="flex items-center justify-between gap-2 w-full">
+              <span className="text-xs font-medium text-emerald-100/85">
+                {isViewingToday ? "Today's Appointments" : `Appointments (${activeDate.slice(5)})`}
               </span>
+              <ArrowUpRight
+                className="w-4 h-4 text-emerald-300 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5"
+                aria-hidden="true"
+              />
+            </div>
+            <div className="mt-3 flex items-baseline justify-between gap-2">
+              <span className="text-3xl font-bold font-mono tabular-nums text-white">
+                {daily.totalAppointments}
+              </span>
+              <span className="text-[11px] font-mono text-emerald-300">
+                {isViewingToday
+                  ? deltaVsYesterday === 0
+                    ? 'Same vs yesterday'
+                    : `${deltaVsYesterday > 0 ? '+' : ''}${deltaVsYesterday} vs yesterday`
+                  : `${daily.confirmedAppointments} confirmed`}
+              </span>
+            </div>
+            <div className="mt-3.5 space-y-1.5 w-full">
+              <div className="h-1.5 w-full rounded-full bg-white/15 overflow-hidden">
+                <div
+                  style={{ transform: `scaleX(${Math.max(0, Math.min(100, completionPct)) / 100})` }}
+                  className="h-full w-full origin-left rounded-full bg-emerald-400 transition-transform duration-300 ease-out"
+                />
+              </div>
+              <div className="text-[11px] text-emerald-100/80 flex items-center justify-between">
+                <span>{daily.upcomingAppointments.length} remaining</span>
+                <span>{daily.completedAppointments} completed</span>
+              </div>
+            </div>
+          </button>
+
+          {/* 2. Total Patients */}
+          <button
+            type="button"
+            data-testid="kpi-total-patients"
+            onClick={() => navigateTarget({ tab: 'patients', status: 'All' })}
+            className="btn-press card-interactive text-left card-surface rounded-xl p-5 flex flex-col justify-between group"
+          >
+            <div className="flex items-center justify-between gap-2 w-full">
+              <span className="text-xs font-medium text-[#526259] group-hover:text-[#0B261C]">
+                Total Patients
+              </span>
+              <div className="w-7 h-7 rounded-lg bg-[#ECF4EF] text-[#047857] flex items-center justify-center">
+                <Users className="w-4 h-4" aria-hidden="true" />
+              </div>
+            </div>
+            <div className="mt-2.5 flex items-baseline justify-between gap-2">
+              <span className="text-3xl font-bold font-mono tabular-nums text-[#111C17]">
+                {overview.totalPatients}
+              </span>
+              <span className="text-[11px] font-mono tabular-nums text-[#047857]">
+                {activePatientPct}% active
+              </span>
+            </div>
+            <div className="mt-3.5 pt-2.5 border-t border-[#EFF3F0] w-full flex items-center justify-between text-[11px]">
+              <span className="text-[#34433B]">{overview.activePatients} active profiles</span>
+              <span className="font-mono text-[#047857] group-hover:underline">Directory →</span>
+            </div>
+          </button>
+
+          {/* 3. Pending Follow-ups */}
+          <button
+            type="button"
+            data-testid="kpi-pending-followups"
+            onClick={() => navigateTarget({ tab: 'followups', followUpView: 'pending' })}
+            className="btn-press card-interactive text-left card-surface rounded-xl p-5 flex flex-col justify-between group"
+          >
+            <div className="flex items-center justify-between gap-2 w-full">
+              <span className="text-xs font-medium text-[#526259] group-hover:text-[#0B261C]">
+                Pending Follow-ups
+              </span>
+              <div className="w-7 h-7 rounded-lg bg-amber-50 text-amber-700 flex items-center justify-center">
+                <ClipboardList className="w-4 h-4" aria-hidden="true" />
+              </div>
+            </div>
+            <div className="mt-2.5 flex items-baseline justify-between gap-2">
+              <span className="text-3xl font-bold font-mono tabular-nums text-[#111C17]">
+                {overview.pendingFollowUpsCount}
+              </span>
+              <span
+                className={`text-[11px] font-mono tabular-nums ${
+                  overview.overdueFollowUpsCount > 0 ? 'text-red-700 font-semibold' : 'text-[#526259]'
+                }`}
+              >
+                {overview.overdueFollowUpsCount} overdue
+              </span>
+            </div>
+            <div className="mt-3.5 pt-2.5 border-t border-[#EFF3F0] w-full flex items-center justify-between text-[11px]">
+              <span className="text-[#34433B]">
+                {overview.highPriorityFollowUpsCount} high priority
+              </span>
+              <span className="font-mono text-[#047857] group-hover:underline">Open Queue →</span>
+            </div>
+          </button>
+
+          {/* 4. Staff on Duty (derived from real clinicians scheduled on activeDate) */}
+          <button
+            type="button"
+            data-testid="kpi-staff-on-duty"
+            onClick={() =>
+              navigateTarget({ tab: 'appointments', date: activeDate, status: 'All' })
+            }
+            className="btn-press card-interactive text-left card-surface rounded-xl p-5 flex flex-col justify-between group"
+          >
+            <div className="flex items-center justify-between gap-2 w-full">
+              <span className="text-xs font-medium text-[#526259] group-hover:text-[#0B261C]">
+                Staff on Duty
+              </span>
+              <div className="w-7 h-7 rounded-lg bg-[#ECF4EF] text-[#047857] flex items-center justify-center">
+                <Stethoscope className="w-4 h-4" aria-hidden="true" />
+              </div>
+            </div>
+            <div className="mt-2.5 flex items-center justify-between gap-2">
+              <span className="text-3xl font-bold font-mono tabular-nums text-[#111C17]">
+                {activeCliniciansToday.length}
+                <span className="text-sm font-normal text-[#526259]">
+                  /{CLINIC_CLINICIANS.length}
+                </span>
+              </span>
+              <div className="flex -space-x-1.5" aria-hidden="true">
+                {activeCliniciansToday.slice(0, 4).map((name) => (
+                  <EditorialAvatar key={name} name={name} role="clinician" size="xs" />
+                ))}
+              </div>
+            </div>
+            <div className="mt-3.5 pt-2.5 border-t border-[#EFF3F0] w-full flex items-center justify-between text-[11px]">
+              <span className="text-[#34433B] truncate max-w-[165px]">
+                {activeCliniciansToday.length > 0
+                  ? activeCliniciansToday.slice(0, 2).join(', ')
+                  : 'No clinicians scheduled'}
+              </span>
+              <span className="font-mono text-[#047857] group-hover:underline shrink-0">
+                Roster →
+              </span>
+            </div>
+          </button>
+        </div>
+      </section>
+
+      {/* Section 3: Analytics Composition (Asymmetric 7 : 5 Split) */}
+      <section className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* Left: Interactive SVG Appointment Activity Chart */}
+        <div className="lg:col-span-7 card-surface rounded-xl p-6 flex flex-col justify-between">
+          <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
+            <div>
+              <h3 className="text-base font-semibold text-[#111C17]">
+                Appointment Activity Over Time
+              </h3>
+              <p className="text-xs text-[#526259] mt-0.5">
+                {overview.windowStart} to {overview.windowEnd} · Hover any date for status breakdown or select to focus schedule
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={loadData}
+              className="btn-press inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#526259] hover:text-[#111C17] border border-[#E3E8E4] hover:bg-[#F6F8F6] rounded-lg whitespace-nowrap shrink-0"
+              aria-label="Refresh operational analytics"
+            >
+              <RefreshCw className="w-3.5 h-3.5" aria-hidden="true" />
+              Refresh
+            </button>
+          </div>
+
+          <AppointmentActivityChart
+            dailyTrend={overview.dailyTrend}
+            todayDate={overview.todayDate}
+            activeDate={activeDate}
+            onSelectDate={handleSelectDate}
+          />
+        </div>
+
+        {/* Right: Appointment Status Distribution + Patient Overview & Operational Indicators */}
+        <div className="lg:col-span-5 card-surface rounded-xl p-6 flex flex-col justify-between gap-5">
+          <div>
+            <div className="flex items-center justify-between gap-3 mb-4">
+              <div>
+                <h3 className="text-base font-semibold text-[#111C17]">
+                  Appointment Status Distribution
+                </h3>
+                <p className="text-xs text-[#526259] mt-0.5">
+                  Click any status slice to filter clinic schedule
+                </p>
+              </div>
               <button
                 type="button"
                 onClick={() => onNavigate('reports')}
-                className="font-medium text-[#047857] hover:text-[#0C291E]"
+                className="text-xs font-medium text-[#047857] hover:underline whitespace-nowrap shrink-0"
               >
-                View Full Reports
+                Full Reports
               </button>
             </div>
-            <div className="h-3 w-full rounded-full overflow-hidden flex bg-[#F1F4F1]">
-              {(
-                [
-                  { key: 'Completed', color: 'bg-[#0C291E]' },
-                  { key: 'Confirmed', color: 'bg-[#059669]' },
-                  { key: 'Scheduled', color: 'bg-amber-500' },
-                  { key: 'Missed', color: 'bg-red-600' },
-                  { key: 'Cancelled', color: 'bg-slate-300' },
-                ] as const
-              ).map((seg) => {
-                const count = overview.statusBreakdown[seg.key] ?? 0;
-                const pct = (count / totalWindowApts) * 100;
-                if (pct <= 0) return null;
-                return (
-                  <div
-                    key={seg.key}
-                    style={{ width: `${pct}%` }}
-                    className={`${seg.color} h-full`}
-                    title={`${seg.key}: ${count}`}
-                  />
-                );
-              })}
-            </div>
-            <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-[#526058] font-mono tabular-nums">
-              {(['Completed', 'Confirmed', 'Scheduled', 'Missed', 'Cancelled'] as const).map(
-                (statusKey) => (
-                  <button
-                    key={statusKey}
-                    type="button"
-                    onClick={() =>
-                      navigateTarget({ tab: 'appointments', status: statusKey, date: '' })
-                    }
-                    className="hover:text-[#047857] hover:underline"
-                  >
-                    {statusKey}: {overview.statusBreakdown[statusKey]}
-                  </button>
-                )
-              )}
-            </div>
-          </div>
-        </div>
 
-        {/* Patient Registration Trends & Operational Alerts */}
-        <div className="lg:col-span-5 space-y-6">
-          {/* Patient Registration Cohorts */}
-          <div className="bg-white border border-[#E4E7E2] rounded-xl p-5">
-            <div className="flex items-center justify-between gap-2 mb-3">
-              <div>
-                <h3 className="text-sm font-semibold text-[#16211C] flex items-center gap-1.5">
-                  <TrendingUp className="w-4 h-4 text-[#047857]" aria-hidden="true" />
-                  Patient Registration Cohorts
-                </h3>
-                <p className="text-xs text-[#526058]">
-                  Recent monthly registrations from database records
-                </p>
-              </div>
+            <StatusDonutChart
+              statusBreakdown={overview.statusBreakdown}
+              totalInWindow={overview.totalAppointmentsInWindow}
+              onSelectStatus={(status) =>
+                navigateTarget({ tab: 'appointments', status, date: '' })
+              }
+            />
+          </div>
+
+          {/* Patient Overview & Operational Performance Strip */}
+          <div className="pt-4 border-t border-[#E3E8E4] space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-semibold text-[#111C17]">
+                Patient Overview &amp; Confirmation Rate
+              </span>
               <button
                 type="button"
                 onClick={() => navigateTarget({ tab: 'patients', status: 'All' })}
-                className="text-xs font-mono tabular-nums font-semibold text-[#047857] hover:underline"
+                className="text-[11px] font-mono tabular-nums text-[#047857] hover:underline"
               >
-                {overview.totalPatients} total
+                {overview.totalPatients} synthetic records
               </button>
             </div>
 
-            <div className="grid grid-cols-8 gap-2 items-end h-24 pt-2 border-b border-[#E4E7E2] pb-1.5">
-              {overview.patientRegistrationTrend.map((cohort) => {
-                const h = Math.max(8, Math.round((cohort.count / maxRegCount) * 64));
-                return (
-                  <div key={cohort.period} className="flex flex-col items-center gap-1">
-                    <span className="text-[11px] font-mono tabular-nums text-[#526058]">
-                      {cohort.count}
-                    </span>
-                    <div
-                      style={{ height: `${h}px` }}
-                      className="w-full max-w-[26px] bg-[#10B981]/80 hover:bg-[#059669] rounded-t-sm transition-colors"
-                      title={`${cohort.period}: ${cohort.count} registered`}
-                    />
-                    <span className="text-[10px] font-mono text-[#526058]">
-                      {cohort.period.slice(2)}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Operational Alerts */}
-          <div className="bg-white border border-[#E4E7E2] rounded-xl p-5 space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-[#16211C]">Operational Alerts</h3>
-              <span className="text-xs font-mono tabular-nums text-[#526058]">
-                {daily.unconfirmedAppointments +
-                  overview.overdueFollowUpsCount +
-                  daily.missedAppointments}{' '}
-                active
-              </span>
-            </div>
-
-            <div className="space-y-2 text-xs">
+            <div className="grid grid-cols-3 gap-3 text-xs pb-1">
               <button
                 type="button"
                 onClick={() =>
-                  navigateTarget({ tab: 'appointments', status: 'Scheduled', date: activeDate })
+                  navigateTarget({ tab: 'appointments', date: activeDate, status: 'Confirmed' })
                 }
-                className="w-full text-left p-3 rounded-lg bg-amber-50/70 hover:bg-amber-50 border border-amber-200/80 flex items-center justify-between gap-3 transition-colors"
+                className="text-left p-2.5 rounded-lg bg-[#F6F8F6] hover:bg-[#ECF4EF] transition-colors"
+                data-testid="kpi-confirmed-appointments"
               >
-                <div>
-                  <div className="font-semibold text-amber-900">
-                    {daily.unconfirmedAppointments} Unconfirmed Appointment
-                    {daily.unconfirmedAppointments === 1 ? '' : 's'} ({daily.date})
-                  </div>
-                  <div className="text-amber-800/80 mt-0.5">
-                    Pending patient attendance confirmation for {daily.date}
-                  </div>
+                <div className="text-[11px] text-[#526259]">Confirmed Rate</div>
+                <div className="text-sm font-bold font-mono tabular-nums text-[#047857] mt-0.5">
+                  {confirmationPct}%
                 </div>
-                <ArrowRight className="w-4 h-4 text-amber-700 shrink-0" aria-hidden="true" />
               </button>
-
               <button
                 type="button"
-                onClick={() => navigateTarget({ tab: 'followups', followUpView: 'overdue' })}
-                className="w-full text-left p-3 rounded-lg bg-red-50/60 hover:bg-red-50 border border-red-200/80 flex items-center justify-between gap-3 transition-colors"
+                onClick={() => navigateTarget({ tab: 'patients', status: 'Active' })}
+                className="text-left p-2.5 rounded-lg bg-[#F6F8F6] hover:bg-[#ECF4EF] transition-colors"
               >
-                <div>
-                  <div className="font-semibold text-red-900">
-                    {overview.overdueFollowUpsCount} Overdue Administrative Follow-up
-                    {overview.overdueFollowUpsCount === 1 ? '' : 's'}
-                  </div>
-                  <div className="text-red-800/80 mt-0.5">
-                    Tasks past due date requiring immediate outreach
-                  </div>
+                <div className="text-[11px] text-[#526259]">Active Patients</div>
+                <div className="text-sm font-bold font-mono tabular-nums text-[#111C17] mt-0.5">
+                  {overview.activePatients}
                 </div>
-                <ArrowRight className="w-4 h-4 text-red-700 shrink-0" aria-hidden="true" />
               </button>
-
               <button
                 type="button"
-                onClick={() => onNavigate('assistant')}
-                className="w-full text-left p-3 rounded-lg bg-[#EDF4F0] hover:bg-[#E1EFE7] border border-[#C5DDD0] flex items-center justify-between gap-3 transition-colors"
+                onClick={() => navigateTarget({ tab: 'appointments', status: 'Missed', date: '' })}
+                className="text-left p-2.5 rounded-lg bg-[#F6F8F6] hover:bg-red-50/80 transition-colors"
+                data-testid="kpi-missed-appointments"
               >
-                <div>
-                  <div className="font-semibold text-[#0C291E]">
-                    {overview.missedLastSevenDaysCount} Missed Appointments (Last 7 Days)
-                  </div>
-                  <div className="text-[#3A5247] mt-0.5">
-                    Prepare follow-up outreach or reschedule via CareDesk Assistant
-                  </div>
+                <div className="text-[11px] text-[#526259]">Missed (7d)</div>
+                <div
+                  className={`text-sm font-bold font-mono tabular-nums mt-0.5 ${
+                    overview.missedLastSevenDaysCount > 0 ? 'text-[#DC2626]' : 'text-[#047857]'
+                  }`}
+                >
+                  {overview.missedLastSevenDaysCount}
                 </div>
-                <ArrowRight className="w-4 h-4 text-[#047857] shrink-0" aria-hidden="true" />
               </button>
             </div>
+
+            <PatientCohortChart trend={overview.patientRegistrationTrend} />
           </div>
         </div>
       </section>
 
-      {/* Interactive Calendar + Selected Date / Today's Schedule + Daily Clinic Activity */}
-      <section className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Interactive Calendar */}
-        <div className="lg:col-span-4 bg-white border border-[#E4E7E2] rounded-xl p-5 space-y-4">
-          <div>
-            <h3 className="text-base font-semibold text-[#16211C]">Clinic Schedule Calendar</h3>
-            <p className="text-xs text-[#526058] mt-0.5">
-              Select a date to inspect scheduled visits &amp; daily metrics
-            </p>
+      {/* Section 4: Integrated CareDesk AI Operational Launchpad */}
+      <section
+        aria-label="CareDesk AI Assistant Quick Launch"
+        className="card-surface rounded-xl p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-5"
+      >
+        <div className="flex flex-col sm:flex-row sm:items-center gap-4 min-w-0">
+          <DashboardOpsSpotIllustration />
+          <div className="min-w-0 space-y-1">
+            <div className="flex items-center gap-2 text-xs font-medium text-[#047857]">
+              <span>CareDesk Operations Copilot</span>
+              <span aria-hidden="true">·</span>
+              <span className="text-[#526259] font-normal">Local REST Preview</span>
+            </div>
+            <h3 className="text-sm sm:text-base font-semibold text-[#111C17]">
+              Initiate an administrative request in natural language
+            </h3>
+            <div className="flex flex-wrap items-center gap-1.5 pt-1">
+              {QUICK_ASSISTANT_PROMPTS.map((prompt) => (
+                <button
+                  key={prompt}
+                  type="button"
+                  onClick={() =>
+                    onLaunchAssistantPrompt
+                      ? onLaunchAssistantPrompt(prompt)
+                      : onNavigate('assistant')
+                  }
+                  className="btn-press text-left px-2.5 py-1 text-xs font-medium text-[#0B261C] bg-[#F4F8F5] hover:bg-[#DCECE3] border border-[#D4E4DA] rounded-md transition-colors max-w-full"
+                >
+                  {prompt}
+                </button>
+              ))}
+            </div>
           </div>
-          <ClinicCalendar
-            selectedDate={activeDate}
-            onSelectDate={handleSelectDate}
-            daySummaries={overview.calendarSummary}
-            compact
-          />
         </div>
 
-        {/* Selected Date / Today's Appointments */}
-        <div className="lg:col-span-5 bg-white border border-[#E4E7E2] rounded-xl overflow-hidden">
-          <div className="px-5 py-4 border-b border-[#E4E7E2] flex items-center justify-between gap-3">
+        <form
+          onSubmit={handleQuickAssistantSubmit}
+          className="flex items-center gap-2 w-full lg:w-[390px] shrink-0"
+        >
+          <label htmlFor="dashboard-assistant-input" className="sr-only">
+            Ask CareDesk Assistant
+          </label>
+          <input
+            id="dashboard-assistant-input"
+            type="text"
+            value={assistantQuickInput}
+            onChange={(e) => setAssistantQuickInput(e.target.value)}
+            placeholder="Ask about schedule, missed visits, or P-1042..."
+            className="flex-1 min-w-0 px-3 py-2 text-xs sm:text-sm bg-[#F6F8F6] border border-[#D4DAD4] rounded-lg focus:bg-white"
+          />
+          <button
+            type="submit"
+            disabled={!assistantQuickInput.trim()}
+            className="btn-press inline-flex items-center gap-1.5 px-3.5 py-2 text-xs sm:text-sm font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg disabled:opacity-50 whitespace-nowrap shrink-0"
+          >
+            <Send className="w-3.5 h-3.5" aria-hidden="true" />
+            Ask CareDesk AI
+          </button>
+        </form>
+      </section>
+
+      {/* Section 5: Asymmetrical Lower Operational Grid (5 : 4 : 3 Split) */}
+      <section className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {/* Left (5 cols): Today's / Focused Date Schedule */}
+        <div className="lg:col-span-5 card-surface rounded-xl overflow-hidden">
+          <div className="px-5 py-4 border-b border-[#E3E8E4] flex items-center justify-between gap-3">
             <div>
-              <h3 className="text-base font-semibold text-[#16211C]">
+              <h3 className="text-base font-semibold text-[#111C17]">
                 Appointments on <span className="font-mono">{activeDate}</span>
               </h3>
-              <p className="text-xs text-[#526058] mt-0.5">
-                {calendarDayAppointments.length} appointment
-                {calendarDayAppointments.length === 1 ? '' : 's'} · Click a row to open details
+              <p className="text-xs text-[#526259] mt-0.5">
+                {calendarDayAppointments.length} visit
+                {calendarDayAppointments.length === 1 ? '' : 's'} · Select row to inspect or reschedule
               </p>
             </div>
             <button
@@ -634,21 +655,21 @@ export function DashboardView({
               onClick={() =>
                 navigateTarget({ tab: 'appointments', date: activeDate, status: 'All' })
               }
-              className="text-xs font-medium text-[#047857] hover:text-[#0C291E] whitespace-nowrap shrink-0"
+              className="text-xs font-medium text-[#047857] hover:text-[#0B261C] whitespace-nowrap shrink-0"
             >
               Manage All
             </button>
           </div>
 
           {calendarDayAppointments.length === 0 ? (
-            <div className="p-8 text-center">
-              <Clock className="w-7 h-7 text-slate-300 mx-auto mb-2" aria-hidden="true" />
-              <p className="text-sm text-[#526058]">
+            <div className="p-8 text-center space-y-2">
+              <ClinicEmptyIllustration variant="appointments" />
+              <p className="text-sm text-[#526259]">
                 No appointments scheduled on {activeDate}.
               </p>
             </div>
           ) : (
-            <div className="divide-y divide-[#E4E7E2] max-h-96 overflow-y-auto">
+            <div className="divide-y divide-[#EEF2EF] max-h-[430px] overflow-y-auto">
               {calendarDayAppointments.map((apt) => (
                 <div
                   key={apt.id}
@@ -673,38 +694,44 @@ export function DashboardView({
                       });
                     }
                   }}
-                  className={`${rowPad} flex flex-col gap-2 hover:bg-[#F7F8F6] transition-colors cursor-pointer focus:outline-none focus:bg-[#EDF4F0]/50`}
+                  className={`${rowPad} flex items-center justify-between gap-3 hover:bg-[#F6F8F6] transition-colors cursor-pointer focus:outline-none focus:bg-[#ECF4EF]/50`}
                 >
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 text-xs min-w-0">
-                      <span className="font-mono tabular-nums font-semibold text-[#0C291E] shrink-0">
-                        {apt.appointmentTime}
-                      </span>
-                      <span className="font-medium text-[#16211C] truncate">
-                        {apt.patientName}
-                      </span>
-                      <span className="font-mono text-[#526058] whitespace-nowrap shrink-0">
-                        · {apt.patientId} · {apt.id}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <AppointmentStatusText status={apt.status} />
-                      {apt.status === 'Scheduled' && (
-                        <button
-                          type="button"
-                          disabled={updatingId === apt.id}
-                          onClick={(e) => handleQuickConfirm(e, apt.id)}
-                          className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium text-[#047857] bg-[#EDF4F0] hover:bg-[#D7E6DD] rounded-md transition-colors disabled:opacity-50"
-                          aria-label={`Confirm appointment ${apt.id}`}
-                        >
-                          <Check className="w-3 h-3" aria-hidden="true" />
-                          Confirm
-                        </button>
-                      )}
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                    <EditorialAvatar
+                      name={apt.patientName ?? apt.patientId}
+                      role="patient"
+                      size="sm"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 text-xs min-w-0">
+                        <span className="font-mono tabular-nums font-semibold text-[#0B261C] shrink-0">
+                          {apt.appointmentTime}
+                        </span>
+                        <span className="font-semibold text-[#111C17] truncate">
+                          {apt.patientName}
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-[#526259] truncate mt-0.5">
+                        <span className="font-mono text-[#64746B]">{apt.patientId}</span>
+                        {' · '}
+                        {apt.department} · {apt.clinician}
+                      </div>
                     </div>
                   </div>
-                  <div className="text-xs text-[#526058] truncate">
-                    {apt.department} · {apt.clinician}
+                  <div className="flex flex-col items-end gap-1 shrink-0">
+                    <AppointmentStatusText status={apt.status} />
+                    {apt.status === 'Scheduled' && (
+                      <button
+                        type="button"
+                        disabled={updatingId === apt.id}
+                        onClick={(e) => handleQuickConfirm(e, apt.id)}
+                        className="btn-press inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium text-[#047857] bg-[#ECF4EF] hover:bg-[#D4E4DA] rounded-md disabled:opacity-50"
+                        aria-label={`Confirm appointment ${apt.id}`}
+                      >
+                        <Check className="w-3 h-3" aria-hidden="true" />
+                        Confirm
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}
@@ -712,26 +739,171 @@ export function DashboardView({
           )}
         </div>
 
-        {/* Daily Clinic Activity */}
-        <div className="lg:col-span-3 bg-white border border-[#E4E7E2] rounded-xl overflow-hidden flex flex-col">
-          <div className="px-5 py-4 border-b border-[#E4E7E2]">
-            <h3 className="text-base font-semibold text-[#16211C]">Daily Clinic Activity</h3>
-            <p className="text-xs text-[#526058] mt-0.5">Live administrative audit log</p>
+        {/* Middle (4 cols): Clinic Calendar + Operational Alerts */}
+        <div className="lg:col-span-4 card-surface rounded-xl p-5 space-y-5">
+          <div>
+            <h3 className="text-base font-semibold text-[#111C17]">Schedule Calendar</h3>
+            <p className="text-xs text-[#526259] mt-0.5">
+              Select any date to inspect clinic load
+            </p>
           </div>
-          <div className="divide-y divide-[#E4E7E2] max-h-96 overflow-y-auto">
-            {overview.recentActivity.length === 0 ? (
-              <p className="p-5 text-xs text-[#526058]">No recent activity recorded.</p>
-            ) : (
-              overview.recentActivity.map((entry) => (
-                <div key={entry.id} className="px-4 py-3">
-                  <p className="text-xs text-[#16211C] leading-relaxed">{entry.summary}</p>
-                  <div className="mt-1 flex items-center gap-1.5 text-[11px] font-mono text-[#526058]">
-                    <span className="truncate max-w-[140px]">{entry.actor}</span>
-                    <span aria-hidden="true">·</span>
-                    <span>{entry.resourceId}</span>
+
+          <ClinicCalendar
+            selectedDate={activeDate}
+            onSelectDate={handleSelectDate}
+            daySummaries={overview.calendarSummary}
+            compact
+          />
+
+          <div className="pt-4 border-t border-[#E3E8E4] space-y-2.5">
+            <div className="flex items-center justify-between">
+              <h4 className="text-xs font-semibold text-[#111C17]">Operational Alerts</h4>
+              <span className="text-[11px] font-mono tabular-nums text-[#526259]">
+                {daily.unconfirmedAppointments +
+                  overview.overdueFollowUpsCount +
+                  daily.missedAppointments}{' '}
+                open
+              </span>
+            </div>
+
+            <div className="space-y-2 text-xs">
+              <button
+                type="button"
+                onClick={() =>
+                  navigateTarget({ tab: 'appointments', status: 'Scheduled', date: activeDate })
+                }
+                className={`btn-press w-full text-left px-3 py-2.5 rounded-lg border flex items-center justify-between gap-2 ${
+                  daily.unconfirmedAppointments > 0
+                    ? 'bg-amber-50/75 hover:bg-amber-50 border-amber-200/80'
+                    : 'bg-[#F4F8F5] hover:bg-[#ECF4EF] border-[#D4E4DA]'
+                }`}
+              >
+                <div className="min-w-0">
+                  <div
+                    className={`font-semibold truncate ${
+                      daily.unconfirmedAppointments > 0 ? 'text-amber-950' : 'text-[#0B261C]'
+                    }`}
+                  >
+                    {daily.unconfirmedAppointments > 0
+                      ? `${daily.unconfirmedAppointments} unconfirmed on ${daily.date}`
+                      : `All visits confirmed on ${daily.date}`}
+                  </div>
+                  <div
+                    className={`text-[11px] truncate ${
+                      daily.unconfirmedAppointments > 0 ? 'text-amber-800/85' : 'text-[#526259]'
+                    }`}
+                  >
+                    {daily.unconfirmedAppointments > 0
+                      ? 'Review scheduled confirmation queue'
+                      : 'No pending confirmations for date'}
                   </div>
                 </div>
-              ))
+                <ArrowRight
+                  className={`w-3.5 h-3.5 shrink-0 ${
+                    daily.unconfirmedAppointments > 0 ? 'text-amber-700' : 'text-[#047857]'
+                  }`}
+                  aria-hidden="true"
+                />
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  navigateTarget({
+                    tab: 'followups',
+                    followUpView: overview.overdueFollowUpsCount > 0 ? 'overdue' : 'pending',
+                  })
+                }
+                className={`btn-press w-full text-left px-3 py-2.5 rounded-lg border flex items-center justify-between gap-2 ${
+                  overview.overdueFollowUpsCount > 0
+                    ? 'bg-red-50/65 hover:bg-red-50 border-red-200/80'
+                    : 'bg-[#F4F8F5] hover:bg-[#ECF4EF] border-[#D4E4DA]'
+                }`}
+              >
+                <div className="min-w-0">
+                  <div
+                    className={`font-semibold truncate ${
+                      overview.overdueFollowUpsCount > 0 ? 'text-red-950' : 'text-[#0B261C]'
+                    }`}
+                  >
+                    {overview.overdueFollowUpsCount > 0
+                      ? `${overview.overdueFollowUpsCount} overdue follow-up${
+                          overview.overdueFollowUpsCount === 1 ? '' : 's'
+                        }`
+                      : 'No overdue follow-ups'}
+                  </div>
+                  <div
+                    className={`text-[11px] truncate ${
+                      overview.overdueFollowUpsCount > 0 ? 'text-red-800/85' : 'text-[#526259]'
+                    }`}
+                  >
+                    {overview.overdueFollowUpsCount > 0
+                      ? 'Requires outreach priority'
+                      : `${overview.pendingFollowUpsCount} open outreach task${
+                          overview.pendingFollowUpsCount === 1 ? '' : 's'
+                        } on track`}
+                  </div>
+                </div>
+                <ArrowRight
+                  className={`w-3.5 h-3.5 shrink-0 ${
+                    overview.overdueFollowUpsCount > 0 ? 'text-red-700' : 'text-[#047857]'
+                  }`}
+                  aria-hidden="true"
+                />
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  onLaunchAssistantPrompt
+                    ? onLaunchAssistantPrompt('Prepare an administrative follow-up list.')
+                    : onNavigate('assistant')
+                }
+                className="btn-press w-full text-left px-3 py-2.5 rounded-lg bg-[#ECF4EF] hover:bg-[#DCECE3] border border-[#C6DFD1] flex items-center justify-between gap-2"
+              >
+                <div className="min-w-0">
+                  <div className="font-semibold text-[#0B261C] truncate">
+                    Prepare Follow-up Outreach List
+                  </div>
+                  <div className="text-[11px] text-[#34433B] truncate">
+                    Triage {overview.missedLastSevenDaysCount} missed 7d visits in Assistant
+                  </div>
+                </div>
+                <ArrowRight className="w-3.5 h-3.5 text-[#047857] shrink-0" aria-hidden="true" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Right (3 cols): Activity Timeline */}
+        <div className="lg:col-span-3 card-surface rounded-xl overflow-hidden flex flex-col">
+          <div className="px-5 py-4 border-b border-[#E3E8E4] flex items-center justify-between gap-2">
+            <div>
+              <h3 className="text-base font-semibold text-[#111C17]">Activity Timeline</h3>
+              <p className="text-xs text-[#526259] mt-0.5">Recent clinic actions</p>
+            </div>
+            <Clock className="w-4 h-4 text-[#526259]" aria-hidden="true" />
+          </div>
+          <div className="p-4 max-h-[430px] overflow-y-auto">
+            {overview.recentActivity.length === 0 ? (
+              <p className="text-xs text-[#526259]">No recent activity recorded.</p>
+            ) : (
+              <ol className="relative border-l border-[#E3E8E4] ml-2 space-y-4">
+                {overview.recentActivity.map((entry) => (
+                  <li key={entry.id} className="pl-4 relative">
+                    <span
+                      className="absolute -left-[4.5px] top-1.5 w-2 h-2 rounded-full bg-[#059669] ring-2 ring-white"
+                      aria-hidden="true"
+                    />
+                    <p className="text-xs text-[#111C17] leading-relaxed">{entry.summary}</p>
+                    <div className="mt-1 flex items-center gap-1.5 text-[11px] font-mono text-[#64746B]">
+                      <span className="truncate max-w-[125px]">{entry.actor}</span>
+                      <span aria-hidden="true">·</span>
+                      <span>{entry.resourceId}</span>
+                    </div>
+                  </li>
+                ))}
+              </ol>
             )}
           </div>
         </div>
