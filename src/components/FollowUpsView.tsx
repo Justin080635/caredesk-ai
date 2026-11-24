@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, Pencil, Plus, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { AlertTriangle, Calendar, Check, Pencil, Plus, RotateCcw, X } from 'lucide-react';
 import {
   createFollowupRecord,
   fetchFollowups,
@@ -16,6 +16,7 @@ import type {
   Patient,
   StaffMember,
 } from '../shared/types';
+import { formatIsoDate, groupFollowUpsByPriority } from '../utils/workspaceMath';
 import { ClinicEmptyIllustration, EditorialAvatar } from './ClinicIllustrations';
 import { ModalShell } from './ModalShell';
 import { FollowUpStatusText, PriorityText } from './StatusText';
@@ -45,6 +46,36 @@ function isTaskOpen(task: FollowUpTask): boolean {
 function isTaskOverdue(task: FollowUpTask, todayKey: string): boolean {
   return task.status === 'Overdue' || (isTaskOpen(task) && task.dueDate < todayKey);
 }
+
+const PRIORITY_LANES: Array<{
+  priority: FollowUpPriority;
+  label: string;
+  subtitle: string;
+  dotColor: string;
+  surfaceTint: string;
+}> = [
+  {
+    priority: 'High',
+    label: 'High Priority',
+    subtitle: 'Urgent outreach & missed visit recovery',
+    dotColor: '#F43F5E',
+    surfaceTint: 'bg-[#FFF5F7]',
+  },
+  {
+    priority: 'Medium',
+    label: 'Medium Priority',
+    subtitle: 'Routine confirmation & check-ins',
+    dotColor: '#F59E0B',
+    surfaceTint: 'bg-[#FFF9EE]',
+  },
+  {
+    priority: 'Low',
+    label: 'Low Priority',
+    subtitle: 'Standard administrative follow-ups',
+    dotColor: '#34C38F',
+    surfaceTint: 'bg-[#F3FAF6]',
+  },
+];
 
 export function FollowUpsView({
   onDataMutated,
@@ -80,7 +111,7 @@ export function FollowUpsView({
   const [dueDate, setDueDate] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() + 1);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    return formatIsoDate(d);
   });
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -98,10 +129,7 @@ export function FollowUpsView({
   const [editError, setEditError] = useState<string | null>(null);
   const [editSubmitting, setEditSubmitting] = useState(false);
 
-  const todayKey = (() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  })();
+  const todayKey = useMemo(() => formatIsoDate(new Date()), []);
 
   useEffect(() => {
     if (initialViewMode) {
@@ -114,10 +142,7 @@ export function FollowUpsView({
     try {
       const [taskList, allSnapshot, patientList, staffMembers] = await Promise.all([
         viewMode === 'pending' || viewMode === 'overdue'
-          ? fetchFollowups({
-              pendingOnly: true,
-              followupType: typeFilter,
-            })
+          ? fetchFollowups({ pendingOnly: true, followupType: typeFilter })
           : fetchFollowups({
               status: viewMode === 'all' ? undefined : viewMode,
               priority: priorityFilter,
@@ -225,7 +250,7 @@ export function FollowUpsView({
       });
       setEditingTask(null);
       onSuccessNotice(
-        `Saved follow-up ${updated.id} (${updated.priority} priority · ${updated.status} · due ${updated.dueDate}).`
+        `Saved follow-up ${updated.id} (${updated.priority} · ${updated.status} · due ${updated.dueDate}).`
       );
       await loadTasks();
       onDataMutated();
@@ -271,7 +296,10 @@ export function FollowUpsView({
     }
   };
 
-  const cellPad = compactDensity ? 'py-2 px-4' : 'py-3 px-4';
+  const groupedByPriority = useMemo(
+    () => groupFollowUpsByPriority(tasks, todayKey),
+    [tasks, todayKey]
+  );
 
   const openQueueCount = allTasksSnapshot.filter((t) => isTaskOpen(t)).length;
   const overdueQueueCount = allTasksSnapshot.filter((t) => isTaskOverdue(t, todayKey)).length;
@@ -280,38 +308,48 @@ export function FollowUpsView({
   ).length;
   const completedCount = allTasksSnapshot.filter((t) => t.status === 'Completed').length;
 
+  const visibleLanes =
+    priorityFilter === 'All'
+      ? PRIORITY_LANES
+      : PRIORITY_LANES.filter((l) => l.priority === priorityFilter);
+
+  const cardPad = compactDensity ? 'p-3.5' : 'p-4';
+
   return (
-    <div className="space-y-5">
-      {/* Follow-up Queue Summary Bar */}
+    <div className="space-y-5 animate-view-enter">
+      {/* Queue Summary Strip */}
       <section className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <button
           type="button"
-          onClick={() => setViewMode('pending')}
-          className="text-left bg-[#0B261C] hover:bg-[#12382A] text-white rounded-xl p-4 transition-colors btn-press"
+          onClick={() => {
+            setViewMode('pending');
+            setPriorityFilter('All');
+          }}
+          className="btn-press text-left rounded-[22px] bg-[#0F3D2E] hover:bg-[#144D3B] text-white p-5 transition-colors"
         >
-          <div className="text-xs font-medium text-emerald-200/85">Open Queue</div>
-          <div className="text-2xl font-bold font-mono tabular-nums mt-1.5">
+          <div className="text-xs font-medium text-emerald-100/80">Open Queue</div>
+          <div className="text-[28px] leading-none font-bold font-mono tabular-nums mt-2">
             {openQueueCount}
           </div>
-          <div className="text-[11px] text-emerald-100/75 mt-0.5">
-            Pending, scheduled, due &amp; overdue
+          <div className="text-[11px] text-emerald-100/75 mt-1.5">
+            Pending, scheduled &amp; overdue
           </div>
         </button>
 
         <button
           type="button"
           onClick={() => setViewMode('overdue')}
-          className="text-left card-surface card-interactive hover:border-[#059669] rounded-xl p-4 transition-colors btn-press"
+          className="btn-press text-left card-surface card-interactive rounded-[22px] p-5"
         >
-          <div className="text-xs font-medium text-[#526259]">Overdue Tasks</div>
+          <div className="text-xs font-medium text-[#6B7B73]">Overdue Tasks</div>
           <div
-            className={`text-2xl font-bold font-mono tabular-nums mt-1.5 ${
-              overdueQueueCount > 0 ? 'text-[#DC2626]' : 'text-[#047857]'
+            className={`text-[28px] leading-none font-bold font-mono tabular-nums mt-2 ${
+              overdueQueueCount > 0 ? 'text-rose-700' : 'text-[#137A55]'
             }`}
           >
             {overdueQueueCount}
           </div>
-          <div className="text-[11px] text-[#526259] mt-0.5">Past target due date</div>
+          <div className="text-[11px] text-[#6B7B73] mt-1.5">Past target due date</div>
         </button>
 
         <button
@@ -320,33 +358,33 @@ export function FollowUpsView({
             setViewMode('pending');
             setPriorityFilter('High');
           }}
-          className="text-left card-surface card-interactive hover:border-[#059669] rounded-xl p-4 transition-colors btn-press"
+          className="btn-press text-left card-surface card-interactive rounded-[22px] p-5"
         >
-          <div className="text-xs font-medium text-[#526259]">High Priority Open</div>
-          <div className="text-2xl font-bold font-mono tabular-nums text-amber-700 mt-1.5">
+          <div className="text-xs font-medium text-[#6B7B73]">High Priority Open</div>
+          <div className="text-[28px] leading-none font-bold font-mono tabular-nums text-amber-700 mt-2">
             {highPriorityOpenCount}
           </div>
-          <div className="text-[11px] text-[#526259] mt-0.5">Urgent administrative outreach</div>
+          <div className="text-[11px] text-[#6B7B73] mt-1.5">Urgent administrative outreach</div>
         </button>
 
         <button
           type="button"
           onClick={() => setViewMode('Completed')}
-          className="text-left card-surface card-interactive hover:border-[#059669] rounded-xl p-4 transition-colors btn-press"
+          className="btn-press text-left card-surface card-interactive rounded-[22px] p-5"
         >
-          <div className="text-xs font-medium text-[#526259]">Completed</div>
-          <div className="text-2xl font-bold font-mono tabular-nums text-[#047857] mt-1.5">
+          <div className="text-xs font-medium text-[#6B7B73]">Completed</div>
+          <div className="text-[28px] leading-none font-bold font-mono tabular-nums text-[#137A55] mt-2">
             {completedCount}
           </div>
-          <div className="text-[11px] text-[#526259] mt-0.5">Resolved follow-up items</div>
+          <div className="text-[11px] text-[#6B7B73] mt-1.5">Resolved follow-up items</div>
         </button>
       </section>
 
       {/* Toolbar */}
-      <div className="card-surface rounded-xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="flex flex-wrap items-center gap-3">
+      <div className="card-surface rounded-[22px] p-4 flex flex-col md:flex-row md:items-center justify-between gap-3.5">
+        <div className="flex flex-wrap items-center gap-2.5">
           <div
-            className="flex items-center gap-1 p-1 bg-[#F1F5F2] rounded-lg overflow-x-auto"
+            className="flex items-center gap-1 p-1 bg-[#EEF3EF] border border-[#DCE8E0] rounded-full overflow-x-auto"
             role="group"
             aria-label="Filter follow-ups by queue view"
           >
@@ -360,10 +398,10 @@ export function FollowUpsView({
                 key={tab.id}
                 type="button"
                 onClick={() => setViewMode(tab.id as typeof viewMode)}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                className={`px-3.5 py-1.5 text-xs font-semibold rounded-full transition-colors whitespace-nowrap shrink-0 ${
                   viewMode === tab.id
-                    ? 'bg-white text-[#0B261C] shadow-xs'
-                    : 'text-[#526259] hover:text-[#111C17]'
+                    ? 'bg-[#0F3D2E] text-white shadow-xs'
+                    : 'text-[#6B7B73] hover:text-[#1C2B25]'
                 }`}
               >
                 {tab.label}
@@ -371,41 +409,31 @@ export function FollowUpsView({
             ))}
           </div>
 
-          <div>
-            <label htmlFor="fu-priority-filter" className="sr-only">
-              Filter by priority
-            </label>
-            <select
-              id="fu-priority-filter"
-              value={priorityFilter}
-              onChange={(e) => setPriorityFilter(e.target.value)}
-              className="px-3 py-2 text-xs font-medium border border-[#D4DAD4] rounded-lg bg-white"
-            >
-              <option value="All">All Priorities</option>
-              <option value="High">High Priority</option>
-              <option value="Medium">Medium Priority</option>
-              <option value="Low">Low Priority</option>
-            </select>
-          </div>
+          <select
+            aria-label="Filter by priority"
+            value={priorityFilter}
+            onChange={(e) => setPriorityFilter(e.target.value)}
+            className="px-3.5 py-2 text-xs font-medium border border-[#DCE8E0] rounded-full bg-[#FAFBF9]"
+          >
+            <option value="All">All Priorities</option>
+            <option value="High">High Priority</option>
+            <option value="Medium">Medium Priority</option>
+            <option value="Low">Low Priority</option>
+          </select>
 
-          <div>
-            <label htmlFor="fu-type-filter" className="sr-only">
-              Filter by type
-            </label>
-            <select
-              id="fu-type-filter"
-              value={typeFilter}
-              onChange={(e) => setTypeFilter(e.target.value)}
-              className="px-3 py-2 text-xs font-medium border border-[#D4DAD4] rounded-lg bg-white"
-            >
-              <option value="All">All Types</option>
-              {FOLLOWUP_TYPES.map((ft) => (
-                <option key={ft} value={ft}>
-                  {ft}
-                </option>
-              ))}
-            </select>
-          </div>
+          <select
+            aria-label="Filter by category"
+            value={typeFilter}
+            onChange={(e) => setTypeFilter(e.target.value)}
+            className="px-3.5 py-2 text-xs font-medium border border-[#DCE8E0] rounded-full bg-[#FAFBF9]"
+          >
+            <option value="All">All Categories</option>
+            {FOLLOWUP_TYPES.map((ft) => (
+              <option key={ft} value={ft}>
+                {ft}
+              </option>
+            ))}
+          </select>
         </div>
 
         {canManageFollowups && (
@@ -415,7 +443,7 @@ export function FollowUpsView({
               setFormError(null);
               setShowCreateModal(true);
             }}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg transition-colors whitespace-nowrap shrink-0 btn-press"
+            className="btn-press inline-flex items-center gap-2 px-4 py-2 text-xs sm:text-sm font-bold text-[#0F3D2E] bg-[#34C38F] hover:bg-[#2bb482] rounded-full transition-colors whitespace-nowrap shrink-0"
           >
             <Plus className="w-4 h-4" aria-hidden="true" />
             New Follow-up
@@ -423,232 +451,243 @@ export function FollowUpsView({
         )}
       </div>
 
-      {/* Follow-up Table */}
-      <div className="card-surface rounded-xl overflow-hidden">
-        <div className="px-5 py-3.5 border-b border-[#E3E8E4] flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-[#111C17]">Administrative Follow-up Tasks</h2>
-          <span className="text-xs font-mono tabular-nums text-[#526259]">
-            {tasks.length} task{tasks.length === 1 ? '' : 's'}
-          </span>
+      {/* Grouped Priority Task Cards */}
+      {loading ? (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5" aria-label="Loading follow-up tasks">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="h-64 card-surface rounded-[24px] animate-pulse" />
+          ))}
         </div>
-
-        {loading ? (
-          <div className="p-5 space-y-3" aria-label="Loading follow-up tasks">
-            {Array.from({ length: 5 }).map((_, i) => (
-              <div key={i} className="flex items-center gap-3 p-2.5 rounded-lg bg-[#F6F8F6]">
-                <div className="w-8 h-8 rounded-full bg-[#E3E8E4] shrink-0" />
-                <div className="flex-1 space-y-1.5">
-                  <div className="h-3.5 w-48 bg-[#E3E8E4] rounded" />
-                  <div className="h-2.5 w-32 bg-[#EEF2EF] rounded" />
-                </div>
-                <div className="h-3.5 w-20 bg-[#E3E8E4] rounded" />
-              </div>
-            ))}
+      ) : tasks.length === 0 ? (
+        <div className="card-surface rounded-[24px] p-10 text-center space-y-3">
+          <ClinicEmptyIllustration variant="followups" />
+          <div className="space-y-1">
+            <p className="text-sm font-semibold text-[#1C2B25]">No follow-up tasks in this view</p>
+            <p className="text-xs text-[#6B7B73]">
+              Switch queue views, reset priority filters, or create a new outreach item.
+            </p>
           </div>
-        ) : tasks.length === 0 ? (
-          <div className="p-10 text-center space-y-3">
-            <ClinicEmptyIllustration variant="followups" />
-            <div className="space-y-1">
-              <p className="text-sm font-medium text-[#111C17]">No follow-up tasks in this view</p>
-              <p className="text-xs text-[#526058]">
-                Switch queue views, reset priority filters, or create a new outreach item.
-              </p>
-            </div>
-            <div className="flex items-center justify-center gap-2 pt-1">
-              {(viewMode !== 'all' || priorityFilter !== 'All') && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setViewMode('all');
-                    setPriorityFilter('All');
-                  }}
-                  className="px-3.5 py-1.5 text-xs font-medium text-[#111C17] bg-white hover:bg-[#F6F8F6] border border-[#D4DAD4] rounded-lg transition-colors btn-press"
-                >
-                  View All Tasks
-                </button>
-              )}
+          <div className="flex items-center justify-center gap-2 pt-1">
+            {(viewMode !== 'all' || priorityFilter !== 'All') && (
+              <button
+                type="button"
+                onClick={() => {
+                  setViewMode('all');
+                  setPriorityFilter('All');
+                }}
+                className="btn-press px-4 py-2 text-xs font-semibold text-[#1C2B25] bg-[#FAFBF9] border border-[#DCE8E0] rounded-full"
+              >
+                View All Tasks
+              </button>
+            )}
+            {canManageFollowups && (
               <button
                 type="button"
                 onClick={() => {
                   setFormError(null);
                   setShowCreateModal(true);
                 }}
-                className="px-3.5 py-1.5 text-xs font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg transition-colors btn-press"
+                className="btn-press px-4 py-2 text-xs font-bold text-[#0F3D2E] bg-[#34C38F] rounded-full"
               >
                 New Follow-up
               </button>
-            </div>
+            )}
           </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-[#E4E7E2] bg-[#F7F8F6] text-xs font-medium text-[#526058]">
-                  <th className="py-2.5 px-4">Task</th>
-                  <th className="py-2.5 px-4">Patient</th>
-                  <th className="py-2.5 px-4">Description</th>
-                  <th className="py-2.5 px-4">Priority · Due</th>
-                  <th className="py-2.5 px-4">Status</th>
-                  <th className="py-2.5 px-4 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#E4E7E2] text-sm">
-                {tasks.map((task) => {
-                  const isOverdue = isTaskOverdue(task, todayKey);
-                  const isRowBusy = updatingTaskId === task.id;
-                  const displayPatient = task.patientName ?? task.patientId;
-                  return (
-                    <tr key={task.id} className="hover:bg-[#F7F8F6] transition-colors">
-                      <td className={`${cellPad} font-mono tabular-nums text-xs`}>
-                        <div className="font-semibold text-[#0C291E]">{task.id}</div>
-                        {task.appointmentId && (
-                          <div className="text-[#526058]">{task.appointmentId}</div>
-                        )}
-                        <div className="text-[10px] font-sans text-[#047857] mt-0.5">
-                          {task.followupType ?? 'Administrative Contact'}
-                        </div>
-                      </td>
-                      <td className={cellPad}>
-                        <div className="flex items-center gap-2.5">
-                          <EditorialAvatar name={displayPatient} role="patient" size="sm" />
-                          {onOpenPatient ? (
-                            <button
-                              type="button"
-                              onClick={() => onOpenPatient(task.patientId)}
-                              className="text-left group"
-                              aria-label={`Open patient record for ${displayPatient} (${task.patientId})`}
-                            >
-                              <div className="font-medium text-[#047857] group-hover:underline">
-                                {displayPatient}
+        </div>
+      ) : (
+        <div
+          className={`grid gap-5 items-start ${
+            visibleLanes.length === 1 ? 'grid-cols-1' : 'grid-cols-1 lg:grid-cols-3'
+          }`}
+        >
+          {visibleLanes.map((lane) => {
+            const laneTasks = groupedByPriority[lane.priority];
+            return (
+              <section
+                key={lane.priority}
+                aria-label={`${lane.label} tasks`}
+                className="card-surface rounded-[24px] p-4 sm:p-5 space-y-3.5"
+              >
+                <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-[#EEF3EF]">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="w-2.5 h-2.5 rounded-full shrink-0"
+                      style={{ backgroundColor: lane.dotColor }}
+                      aria-hidden="true"
+                    />
+                    <div>
+                      <h2 className="text-sm font-bold text-[#1C2B25]">{lane.label}</h2>
+                      <p className="text-[11px] text-[#6B7B73]">{lane.subtitle}</p>
+                    </div>
+                  </div>
+                  <span className="px-2.5 py-0.5 rounded-full bg-[#EEF3EF] text-xs font-mono font-bold tabular-nums text-[#0F3D2E]">
+                    {laneTasks.length}
+                  </span>
+                </div>
+
+                {laneTasks.length === 0 ? (
+                  <div className="rounded-2xl bg-[#FAFBF9] border border-dashed border-[#DCE8E0] p-6 text-center text-xs text-[#6B7B73]">
+                    No {lane.priority.toLowerCase()}-priority tasks in current filter.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {laneTasks.map((task) => {
+                      const isOverdue = isTaskOverdue(task, todayKey);
+                      const isBusy = updatingTaskId === task.id;
+                      const displayPatient = task.patientName ?? task.patientId;
+
+                      return (
+                        <article
+                          key={task.id}
+                          className={`rounded-[20px] border border-[#DCE8E0] ${lane.surfaceTint} ${cardPad} space-y-3 card-interactive`}
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <EditorialAvatar name={displayPatient} role="patient" size="sm" />
+                              <div className="min-w-0">
+                                {onOpenPatient ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => onOpenPatient(task.patientId)}
+                                    className="text-sm font-bold text-[#0F3D2E] hover:underline truncate block text-left"
+                                  >
+                                    {displayPatient}
+                                  </button>
+                                ) : (
+                                  <div className="text-sm font-bold text-[#1C2B25] truncate">
+                                    {displayPatient}
+                                  </div>
+                                )}
+                                <div className="text-[11px] font-mono text-[#6B7B73]">
+                                  {task.id} · {task.patientId}
+                                </div>
                               </div>
-                              <div className="text-xs font-mono text-[#526058]">{task.patientId}</div>
-                            </button>
-                          ) : (
-                            <div>
-                              <div className="font-medium text-[#16211C]">{displayPatient}</div>
-                              <div className="text-xs font-mono text-[#526058]">{task.patientId}</div>
+                            </div>
+                            <FollowUpStatusText status={task.status} />
+                          </div>
+
+                          <p className="text-xs text-[#1C2B25] leading-relaxed font-medium">
+                            {task.description}
+                          </p>
+
+                          {(task.reason || task.assignedToName) && (
+                            <div className="text-[11px] text-[#6B7B73] space-y-0.5">
+                              {task.reason && <div>Reason: {task.reason}</div>}
+                              {task.assignedToName && (
+                                <div className="text-[#137A55] font-medium">
+                                  Owner: {task.assignedToName}
+                                </div>
+                              )}
                             </div>
                           )}
-                        </div>
-                      </td>
-                      <td className={`${cellPad} text-xs text-[#16211C] max-w-md space-y-1`}>
-                        <div>{task.description}</div>
-                        {task.reason && (
-                          <div className="text-[11px] text-[#526259]">Reason: {task.reason}</div>
-                        )}
-                        {task.assignedToName && (
-                          <div className="text-[11px] text-[#047857]">
-                            Owner: {task.assignedToName}
-                          </div>
-                        )}
-                        {task.completionNotes && (
-                          <div className="text-[11px] text-[#34433B] bg-[#F6F8F6] px-2 py-1 rounded border border-[#E3E8E4]">
-                            Outcome: {task.completionNotes}
-                          </div>
-                        )}
-                      </td>
-                      <td className={`${cellPad} text-xs whitespace-nowrap`}>
-                        <div className="flex items-center gap-2">
-                          <PriorityText priority={task.priority} />
-                          {canManageFollowups && (
-                            <select
-                              aria-label={`Change priority for ${task.id}`}
-                              value={task.priority}
-                              disabled={isRowBusy}
-                              onChange={(e) =>
-                                handleQuickPriorityChange(
-                                  task.id,
-                                  e.target.value as FollowUpPriority
-                                )
-                              }
-                              className="px-1.5 py-0.5 text-[11px] border border-[#D4DAD4] rounded bg-white text-[#16211C] disabled:opacity-50"
-                            >
-                              <option value="High">High</option>
-                              <option value="Medium">Medium</option>
-                              <option value="Low">Low</option>
-                            </select>
-                          )}
-                        </div>
-                        <div
-                          className={`font-mono tabular-nums mt-1 flex items-center gap-1 ${
-                            isOverdue ? 'text-red-700 font-semibold' : 'text-[#526058]'
-                          }`}
-                        >
-                          {isOverdue && <AlertTriangle className="w-3 h-3" aria-hidden="true" />}
-                          <span>
-                            {isOverdue ? `Overdue (${task.dueDate})` : `Due ${task.dueDate}`}
-                          </span>
-                        </div>
-                      </td>
-                      <td className={cellPad}>
-                        <FollowUpStatusText status={task.status} />
-                      </td>
-                      <td className={`${cellPad} text-right whitespace-nowrap`}>
-                        {canManageFollowups ? (
-                          <div className="inline-flex items-center gap-2.5">
-                            <button
-                              type="button"
-                              disabled={isRowBusy}
-                              onClick={() => openEditModal(task)}
-                              className="inline-flex items-center gap-1 text-xs font-medium text-[#0C291E] hover:text-[#047857] disabled:opacity-50"
-                              aria-label={`Edit follow-up ${task.id}`}
-                            >
-                              <Pencil className="w-3 h-3" aria-hidden="true" />
-                              Edit
-                            </button>
-                            {task.status === 'Pending' && (
-                              <button
-                                type="button"
-                                disabled={isRowBusy}
-                                onClick={() => handleStatusChange(task.id, 'Scheduled')}
-                                className="text-xs font-medium text-[#047857] hover:text-[#0C291E] disabled:opacity-50"
+
+                          {/* Due-date & Overdue badges */}
+                          <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-[#DCE8E0]/80">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span
+                                className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-mono font-semibold tabular-nums ${
+                                  isOverdue
+                                    ? 'bg-rose-100 text-rose-800 border border-rose-200'
+                                    : 'bg-white text-[#1C2B25] border border-[#DCE8E0]'
+                                }`}
                               >
-                                Schedule
-                              </button>
+                                {isOverdue ? (
+                                  <AlertTriangle className="w-3 h-3" aria-hidden="true" />
+                                ) : (
+                                  <Calendar className="w-3 h-3 text-[#6B7B73]" aria-hidden="true" />
+                                )}
+                                {isOverdue ? `Overdue · ${task.dueDate}` : `Due ${task.dueDate}`}
+                              </span>
+                              <PriorityText priority={task.priority} />
+                            </div>
+
+                            {canManageFollowups && (
+                              <select
+                                aria-label={`Change priority for ${task.id}`}
+                                value={task.priority}
+                                disabled={isBusy}
+                                onChange={(e) =>
+                                  handleQuickPriorityChange(
+                                    task.id,
+                                    e.target.value as FollowUpPriority
+                                  )
+                                }
+                                className="px-2 py-0.5 text-[11px] border border-[#DCE8E0] rounded-full bg-white text-[#1C2B25] disabled:opacity-50"
+                              >
+                                <option value="High">High</option>
+                                <option value="Medium">Medium</option>
+                                <option value="Low">Low</option>
+                              </select>
                             )}
-                            {isTaskOpen(task) && (
-                              <>
+                          </div>
+
+                          {/* Card Actions */}
+                          {canManageFollowups && (
+                            <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                              {isTaskOpen(task) && (
                                 <button
                                   type="button"
-                                  disabled={isRowBusy}
+                                  disabled={isBusy}
                                   onClick={() => handleStatusChange(task.id, 'Completed')}
-                                  className="text-xs font-medium text-emerald-700 hover:text-emerald-800 disabled:opacity-50"
+                                  className="btn-press inline-flex items-center gap-1 px-3 py-1 rounded-full text-[11px] font-bold text-[#0F3D2E] bg-[#34C38F] hover:bg-[#2bb482] disabled:opacity-50"
                                 >
+                                  <Check className="w-3 h-3" aria-hidden="true" />
                                   Complete
                                 </button>
+                              )}
+                              {task.status === 'Pending' && (
                                 <button
                                   type="button"
-                                  disabled={isRowBusy}
+                                  disabled={isBusy}
+                                  onClick={() => handleStatusChange(task.id, 'Scheduled')}
+                                  className="btn-press px-3 py-1 rounded-full text-[11px] font-semibold text-[#0F3D2E] bg-white border border-[#DCE8E0] hover:bg-[#EEF3EF] disabled:opacity-50"
+                                >
+                                  Schedule
+                                </button>
+                              )}
+                              {(task.status === 'Completed' || task.status === 'Cancelled') && (
+                                <button
+                                  type="button"
+                                  disabled={isBusy}
+                                  onClick={() => handleStatusChange(task.id, 'Pending')}
+                                  className="btn-press inline-flex items-center gap-1 px-3 py-1 rounded-full text-[11px] font-semibold text-[#0F3D2E] bg-white border border-[#DCE8E0] hover:bg-[#EEF3EF] disabled:opacity-50"
+                                >
+                                  <RotateCcw className="w-3 h-3" aria-hidden="true" />
+                                  Reopen
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                disabled={isBusy}
+                                onClick={() => openEditModal(task)}
+                                aria-label={`Edit follow-up ${task.id}`}
+                                className="btn-press inline-flex items-center gap-1 px-3 py-1 rounded-full text-[11px] font-semibold text-[#6B7B73] hover:text-[#1C2B25] bg-white border border-[#DCE8E0] disabled:opacity-50"
+                              >
+                                <Pencil className="w-3 h-3" aria-hidden="true" />
+                                Edit
+                              </button>
+                              {isTaskOpen(task) && (
+                                <button
+                                  type="button"
+                                  disabled={isBusy}
                                   onClick={() => handleStatusChange(task.id, 'Cancelled')}
-                                  className="text-xs font-medium text-[#526058] hover:text-[#16211C] disabled:opacity-50"
+                                  className="btn-press ml-auto px-2.5 py-1 rounded-full text-[11px] font-medium text-[#6B7B73] hover:text-rose-700 disabled:opacity-50"
                                 >
                                   Cancel
                                 </button>
-                              </>
-                            )}
-                            {(task.status === 'Completed' || task.status === 'Cancelled') && (
-                              <button
-                                type="button"
-                                disabled={isRowBusy}
-                                onClick={() => handleStatusChange(task.id, 'Pending')}
-                                className="text-xs font-medium text-[#526058] hover:text-[#16211C] disabled:opacity-50"
-                              >
-                                Reopen
-                              </button>
-                            )}
-                          </div>
-                        ) : (
-                          <span className="text-xs text-[#6C7B73]">View only</span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+                              )}
+                            </div>
+                          )}
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+            );
+          })}
+        </div>
+      )}
 
       {/* Create Follow-up Modal */}
       <ModalShell
@@ -657,175 +696,175 @@ export function FollowUpsView({
         labelledBy="create-fu-title"
         maxWidthClass="max-w-lg"
       >
-            <div className="flex items-center justify-between">
-              <h3 id="create-fu-title" className="text-base font-semibold text-[#16211C]">
-                Create Administrative Follow-up
-              </h3>
-              <button
-                type="button"
-                onClick={() => setShowCreateModal(false)}
-                className="p-1 text-[#526058] hover:text-[#16211C]"
-                aria-label="Close create follow-up dialog"
+        <div className="flex items-center justify-between">
+          <h3 id="create-fu-title" className="text-base font-bold text-[#1C2B25]">
+            Create Follow-up Task
+          </h3>
+          <button
+            type="button"
+            onClick={() => setShowCreateModal(false)}
+            className="p-1.5 text-[#6B7B73] hover:text-[#1C2B25] rounded-full hover:bg-[#EEF3EF]"
+            aria-label="Close create follow-up dialog"
+          >
+            <X className="w-4 h-4" aria-hidden="true" />
+          </button>
+        </div>
+
+        {formError && (
+          <div className="p-3 text-xs text-rose-800 bg-rose-50 border border-rose-200 rounded-2xl">
+            {formError}
+          </div>
+        )}
+
+        <form onSubmit={handleCreateSubmit} className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label htmlFor="fu-patient" className="block text-xs font-semibold text-[#1C2B25] mb-1">
+                Patient
+              </label>
+              <select
+                id="fu-patient"
+                value={patientId}
+                onChange={(e) => setPatientId(e.target.value)}
+                className="w-full px-3.5 py-2 text-sm border border-[#DCE8E0] rounded-xl bg-white"
               >
-                <X className="w-4 h-4" aria-hidden="true" />
-              </button>
+                {patients.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.id} — {p.fullName}
+                  </option>
+                ))}
+              </select>
             </div>
+            <div>
+              <label htmlFor="fu-apt-id" className="block text-xs font-semibold text-[#1C2B25] mb-1">
+                Appointment ID (Optional)
+              </label>
+              <input
+                id="fu-apt-id"
+                type="text"
+                value={appointmentId}
+                onChange={(e) => setAppointmentId(e.target.value)}
+                placeholder="e.g. APT-2019"
+                className="w-full px-3.5 py-2 text-sm bg-white border border-[#DCE8E0] rounded-xl"
+              />
+            </div>
+          </div>
 
-            {formError && (
-              <div className="p-3 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg">
-                {formError}
-              </div>
-            )}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label htmlFor="fu-type" className="block text-xs font-semibold text-[#1C2B25] mb-1">
+                Category
+              </label>
+              <select
+                id="fu-type"
+                value={followupType}
+                onChange={(e) => setFollowupType(e.target.value as FollowUpType)}
+                className="w-full px-3.5 py-2 text-sm border border-[#DCE8E0] rounded-xl bg-white"
+              >
+                {FOLLOWUP_TYPES.map((ft) => (
+                  <option key={ft} value={ft}>
+                    {ft}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="fu-owner" className="block text-xs font-semibold text-[#1C2B25] mb-1">
+                Assigned Staff Owner
+              </label>
+              <select
+                id="fu-owner"
+                value={assignedStaffId}
+                onChange={(e) => setAssignedStaffId(e.target.value)}
+                className="w-full px-3.5 py-2 text-sm border border-[#DCE8E0] rounded-xl bg-white"
+              >
+                <option value="">Unassigned (Clinic Queue)</option>
+                {staffList.map((stf) => (
+                  <option key={stf.id} value={stf.id}>
+                    {stf.fullName} ({stf.role})
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
 
-            <form onSubmit={handleCreateSubmit} className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label htmlFor="fu-patient" className="block text-xs font-medium text-[#16211C] mb-1">
-                    Patient
-                  </label>
-                  <select
-                    id="fu-patient"
-                    value={patientId}
-                    onChange={(e) => setPatientId(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg bg-white"
-                  >
-                    {patients.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.id} — {p.fullName}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label htmlFor="fu-apt-id" className="block text-xs font-medium text-[#16211C] mb-1">
-                    Appointment ID (Optional)
-                  </label>
-                  <input
-                    id="fu-apt-id"
-                    type="text"
-                    value={appointmentId}
-                    onChange={(e) => setAppointmentId(e.target.value)}
-                    placeholder="e.g. APT-2019"
-                    className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg"
-                  />
-                </div>
-              </div>
+          <div>
+            <label htmlFor="fu-description" className="block text-xs font-semibold text-[#1C2B25] mb-1">
+              Task Description
+            </label>
+            <textarea
+              id="fu-description"
+              required
+              rows={2}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Describe administrative outreach or clinical follow-up action..."
+              className="w-full px-3.5 py-2 text-sm bg-white border border-[#DCE8E0] rounded-xl"
+            />
+          </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label htmlFor="fu-type" className="block text-xs font-medium text-[#16211C] mb-1">
-                    Follow-up Category
-                  </label>
-                  <select
-                    id="fu-type"
-                    value={followupType}
-                    onChange={(e) => setFollowupType(e.target.value as FollowUpType)}
-                    className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg bg-white"
-                  >
-                    {FOLLOWUP_TYPES.map((ft) => (
-                      <option key={ft} value={ft}>
-                        {ft}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label htmlFor="fu-owner" className="block text-xs font-medium text-[#16211C] mb-1">
-                    Assigned Staff Owner (Optional)
-                  </label>
-                  <select
-                    id="fu-owner"
-                    value={assignedStaffId}
-                    onChange={(e) => setAssignedStaffId(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg bg-white"
-                  >
-                    <option value="">Unassigned (Clinic Queue)</option>
-                    {staffList.map((stf) => (
-                      <option key={stf.id} value={stf.id}>
-                        {stf.fullName} ({stf.role})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
+          <div>
+            <label htmlFor="fu-reason" className="block text-xs font-semibold text-[#1C2B25] mb-1">
+              Reason / Context (Optional)
+            </label>
+            <input
+              id="fu-reason"
+              type="text"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="e.g. Missed Cardiology consultation or lab check"
+              className="w-full px-3.5 py-2 text-sm bg-white border border-[#DCE8E0] rounded-xl"
+            />
+          </div>
 
-              <div>
-                <label htmlFor="fu-description" className="block text-xs font-medium text-[#16211C] mb-1">
-                  Task Description
-                </label>
-                <textarea
-                  id="fu-description"
-                  required
-                  rows={2}
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  placeholder="Describe administrative outreach or clinical follow-up action..."
-                  className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg"
-                />
-              </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label htmlFor="fu-priority" className="block text-xs font-semibold text-[#1C2B25] mb-1">
+                Priority
+              </label>
+              <select
+                id="fu-priority"
+                value={priority}
+                onChange={(e) => setPriority(e.target.value as FollowUpPriority)}
+                className="w-full px-3.5 py-2 text-sm border border-[#DCE8E0] rounded-xl bg-white"
+              >
+                <option value="High">High</option>
+                <option value="Medium">Medium</option>
+                <option value="Low">Low</option>
+              </select>
+            </div>
+            <div>
+              <label htmlFor="fu-due" className="block text-xs font-semibold text-[#1C2B25] mb-1">
+                Due Date
+              </label>
+              <input
+                id="fu-due"
+                type="date"
+                required
+                value={dueDate}
+                onChange={(e) => setDueDate(e.target.value)}
+                className="w-full px-3.5 py-2 text-sm bg-white border border-[#DCE8E0] rounded-xl"
+              />
+            </div>
+          </div>
 
-              <div>
-                <label htmlFor="fu-reason" className="block text-xs font-medium text-[#16211C] mb-1">
-                  Reason / Context (Optional)
-                </label>
-                <input
-                  id="fu-reason"
-                  type="text"
-                  value={reason}
-                  onChange={(e) => setReason(e.target.value)}
-                  placeholder="e.g. Missed Cardiology consultation or lab check"
-                  className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg"
-                />
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label htmlFor="fu-priority" className="block text-xs font-medium text-[#16211C] mb-1">
-                    Priority
-                  </label>
-                  <select
-                    id="fu-priority"
-                    value={priority}
-                    onChange={(e) => setPriority(e.target.value as FollowUpPriority)}
-                    className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg bg-white"
-                  >
-                    <option value="High">High</option>
-                    <option value="Medium">Medium</option>
-                    <option value="Low">Low</option>
-                  </select>
-                </div>
-                <div>
-                  <label htmlFor="fu-due" className="block text-xs font-medium text-[#16211C] mb-1">
-                    Due Date
-                  </label>
-                  <input
-                    id="fu-due"
-                    type="date"
-                    required
-                    value={dueDate}
-                    onChange={(e) => setDueDate(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg"
-                  />
-                </div>
-              </div>
-
-              <div className="flex items-center justify-end gap-3 pt-2 border-t border-[#E4E7E2]">
-                <button
-                  type="button"
-                  onClick={() => setShowCreateModal(false)}
-                  className="px-4 py-2 text-sm font-medium text-[#526058] border border-[#E4E7E2] rounded-lg"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={submitting}
-                  className="px-4 py-2 text-sm font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg disabled:opacity-50 btn-press"
-                >
-                  {submitting ? 'Creating...' : 'Create Task'}
-                </button>
-              </div>
-            </form>
+          <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-[#DCE8E0]">
+            <button
+              type="button"
+              onClick={() => setShowCreateModal(false)}
+              className="btn-press px-4 py-2 text-xs font-semibold text-[#6B7B73] border border-[#DCE8E0] rounded-full"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={submitting}
+              className="btn-press px-5 py-2 text-xs font-bold text-[#0F3D2E] bg-[#34C38F] hover:bg-[#2bb482] rounded-full disabled:opacity-50"
+            >
+              {submitting ? 'Creating...' : 'Create Task'}
+            </button>
+          </div>
+        </form>
       </ModalShell>
 
       {/* Edit Follow-up Modal */}
@@ -839,17 +878,17 @@ export function FollowUpsView({
           <>
             <div className="flex items-center justify-between">
               <div>
-                <h3 id="edit-fu-title" className="text-base font-semibold text-[#16211C]">
+                <h3 id="edit-fu-title" className="text-base font-bold text-[#1C2B25]">
                   Edit Follow-up {editingTask.id}
                 </h3>
-                <p className="text-xs text-[#526058] mt-0.5">
+                <p className="text-xs text-[#6B7B73] mt-0.5">
                   {editingTask.patientName} ({editingTask.patientId})
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setEditingTask(null)}
-                className="p-1 text-[#526058] hover:text-[#16211C]"
+                className="p-1.5 text-[#6B7B73] hover:text-[#1C2B25] rounded-full hover:bg-[#EEF3EF]"
                 aria-label="Close edit follow-up dialog"
               >
                 <X className="w-4 h-4" aria-hidden="true" />
@@ -857,7 +896,7 @@ export function FollowUpsView({
             </div>
 
             {editError && (
-              <div className="p-3 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg">
+              <div className="p-3 text-xs text-rose-800 bg-rose-50 border border-rose-200 rounded-2xl">
                 {editError}
               </div>
             )}
@@ -865,14 +904,14 @@ export function FollowUpsView({
             <form onSubmit={handleEditSubmit} className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label htmlFor="edit-fu-type" className="block text-xs font-medium text-[#16211C] mb-1">
+                  <label htmlFor="edit-fu-type" className="block text-xs font-semibold text-[#1C2B25] mb-1">
                     Category
                   </label>
                   <select
                     id="edit-fu-type"
                     value={editFollowupType}
                     onChange={(e) => setEditFollowupType(e.target.value as FollowUpType)}
-                    className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg bg-white"
+                    className="w-full px-3.5 py-2 text-sm border border-[#DCE8E0] rounded-xl bg-white"
                   >
                     {FOLLOWUP_TYPES.map((ft) => (
                       <option key={ft} value={ft}>
@@ -882,14 +921,14 @@ export function FollowUpsView({
                   </select>
                 </div>
                 <div>
-                  <label htmlFor="edit-fu-owner" className="block text-xs font-medium text-[#16211C] mb-1">
+                  <label htmlFor="edit-fu-owner" className="block text-xs font-semibold text-[#1C2B25] mb-1">
                     Assigned Staff Owner
                   </label>
                   <select
                     id="edit-fu-owner"
                     value={editAssignedStaffId}
                     onChange={(e) => setEditAssignedStaffId(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg bg-white"
+                    className="w-full px-3.5 py-2 text-sm border border-[#DCE8E0] rounded-xl bg-white"
                   >
                     <option value="">Unassigned (Clinic Queue)</option>
                     {staffList.map((stf) => (
@@ -902,7 +941,7 @@ export function FollowUpsView({
               </div>
 
               <div>
-                <label htmlFor="edit-fu-description" className="block text-xs font-medium text-[#16211C] mb-1">
+                <label htmlFor="edit-fu-description" className="block text-xs font-semibold text-[#1C2B25] mb-1">
                   Task Description
                 </label>
                 <textarea
@@ -911,12 +950,12 @@ export function FollowUpsView({
                   rows={2}
                   value={editDescription}
                   onChange={(e) => setEditDescription(e.target.value)}
-                  className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg"
+                  className="w-full px-3.5 py-2 text-sm bg-white border border-[#DCE8E0] rounded-xl"
                 />
               </div>
 
               <div>
-                <label htmlFor="edit-fu-reason" className="block text-xs font-medium text-[#16211C] mb-1">
+                <label htmlFor="edit-fu-reason" className="block text-xs font-semibold text-[#1C2B25] mb-1">
                   Reason / Context
                 </label>
                 <input
@@ -924,20 +963,20 @@ export function FollowUpsView({
                   type="text"
                   value={editReason}
                   onChange={(e) => setEditReason(e.target.value)}
-                  className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg"
+                  className="w-full px-3.5 py-2 text-sm bg-white border border-[#DCE8E0] rounded-xl"
                 />
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
-                  <label htmlFor="edit-fu-priority" className="block text-xs font-medium text-[#16211C] mb-1">
+                  <label htmlFor="edit-fu-priority" className="block text-xs font-semibold text-[#1C2B25] mb-1">
                     Priority
                   </label>
                   <select
                     id="edit-fu-priority"
                     value={editPriority}
                     onChange={(e) => setEditPriority(e.target.value as FollowUpPriority)}
-                    className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg bg-white"
+                    className="w-full px-3 py-2 text-sm border border-[#DCE8E0] rounded-xl bg-white"
                   >
                     <option value="High">High</option>
                     <option value="Medium">Medium</option>
@@ -946,14 +985,14 @@ export function FollowUpsView({
                 </div>
 
                 <div>
-                  <label htmlFor="edit-fu-status" className="block text-xs font-medium text-[#16211C] mb-1">
+                  <label htmlFor="edit-fu-status" className="block text-xs font-semibold text-[#1C2B25] mb-1">
                     Status
                   </label>
                   <select
                     id="edit-fu-status"
                     value={editStatus}
                     onChange={(e) => setEditStatus(e.target.value as FollowUpStatus)}
-                    className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg bg-white"
+                    className="w-full px-3 py-2 text-sm border border-[#DCE8E0] rounded-xl bg-white"
                   >
                     {FOLLOWUP_STATUSES.map((st) => (
                       <option key={st} value={st}>
@@ -964,7 +1003,7 @@ export function FollowUpsView({
                 </div>
 
                 <div>
-                  <label htmlFor="edit-fu-due" className="block text-xs font-medium text-[#16211C] mb-1">
+                  <label htmlFor="edit-fu-due" className="block text-xs font-semibold text-[#1C2B25] mb-1">
                     Due Date
                   </label>
                   <input
@@ -973,13 +1012,13 @@ export function FollowUpsView({
                     required
                     value={editDueDate}
                     onChange={(e) => setEditDueDate(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg"
+                    className="w-full px-3 py-2 text-sm bg-white border border-[#DCE8E0] rounded-xl"
                   />
                 </div>
               </div>
 
               <div>
-                <label htmlFor="edit-fu-completion" className="block text-xs font-medium text-[#16211C] mb-1">
+                <label htmlFor="edit-fu-completion" className="block text-xs font-semibold text-[#1C2B25] mb-1">
                   Completion / Outcome Notes
                 </label>
                 <input
@@ -987,23 +1026,23 @@ export function FollowUpsView({
                   type="text"
                   value={editCompletionNotes}
                   onChange={(e) => setEditCompletionNotes(e.target.value)}
-                  placeholder="Summary of outreach call or clinical completion..."
-                  className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg"
+                  placeholder="Summary of outreach call or completion..."
+                  className="w-full px-3.5 py-2 text-sm bg-white border border-[#DCE8E0] rounded-xl"
                 />
               </div>
 
-              <div className="flex items-center justify-end gap-3 pt-2 border-t border-[#E4E7E2]">
+              <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-[#DCE8E0]">
                 <button
                   type="button"
                   onClick={() => setEditingTask(null)}
-                  className="px-4 py-2 text-sm font-medium text-[#526058] border border-[#E4E7E2] rounded-lg"
+                  className="btn-press px-4 py-2 text-xs font-semibold text-[#6B7B73] border border-[#DCE8E0] rounded-full"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={editSubmitting}
-                  className="px-4 py-2 text-sm font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg disabled:opacity-50 btn-press"
+                  className="btn-press px-5 py-2 text-xs font-bold text-[#0F3D2E] bg-[#34C38F] hover:bg-[#2bb482] rounded-full disabled:opacity-50"
                 >
                   {editSubmitting ? 'Saving...' : 'Save Changes'}
                 </button>

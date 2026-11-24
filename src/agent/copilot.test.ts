@@ -410,6 +410,7 @@ test('CareDeskAgent scopes Doctor role prompts to personal doctor dashboard and 
               id: 'FU-900',
               patientId: 'P-1042',
               patientName: 'Julian Mercer',
+              appointmentId: null,
               description: 'Review CBC lab results',
               priority: 'High',
               createdDate: '2026-11-24',

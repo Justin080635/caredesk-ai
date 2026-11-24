@@ -75,7 +75,6 @@ export function PatientsView({
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  // Edit Patient Modal State
   const [showEditModal, setShowEditModal] = useState(false);
   const [editFullName, setEditFullName] = useState('');
   const [editDob, setEditDob] = useState('');
@@ -113,12 +112,8 @@ export function PatientsView({
     }
   }, [openCreateSignal]);
 
-  const handleSelectPatient = useCallback(
+  const handleOpenDrawer = useCallback(
     async (patientId: string) => {
-      if (onOpenPatient) {
-        onOpenPatient(patientId);
-        return;
-      }
       setDetailLoading(true);
       try {
         const detail = await fetchPatientDetail(patientId);
@@ -129,14 +124,14 @@ export function PatientsView({
         setDetailLoading(false);
       }
     },
-    [onErrorNotice, onOpenPatient]
+    [onErrorNotice]
   );
 
   useEffect(() => {
     if (initialSelectedPatientId && !onOpenPatient) {
-      handleSelectPatient(initialSelectedPatientId);
+      handleOpenDrawer(initialSelectedPatientId);
     }
-  }, [initialSelectedPatientId, handleSelectPatient, onOpenPatient]);
+  }, [initialSelectedPatientId, handleOpenDrawer, onOpenPatient]);
 
   useEffect(() => {
     if (initialStatusFilter) {
@@ -184,7 +179,7 @@ export function PatientsView({
       setAdminStatus('Active');
       onSuccessNotice(`Registered patient ${created.fullName} (${created.id}).`);
       await loadPatients();
-      await handleSelectPatient(created.id);
+      await handleOpenDrawer(created.id);
       onDataMutated();
     } catch (err) {
       setFormError(err instanceof Error ? err.message : 'Failed to register patient.');
@@ -218,7 +213,7 @@ export function PatientsView({
       });
       setShowEditModal(false);
       onSuccessNotice(`Updated patient ${updated.fullName} (${updated.id}).`);
-      await Promise.all([loadPatients(), handleSelectPatient(updated.id)]);
+      await Promise.all([loadPatients(), handleOpenDrawer(updated.id)]);
       onDataMutated();
     } catch (err) {
       setEditError(err instanceof Error ? err.message : 'Failed to update patient record.');
@@ -228,7 +223,7 @@ export function PatientsView({
   };
 
   const statusTabs = ['All', 'Active', 'Pending Verification', 'Inactive'];
-  const cellPad = compactDensity ? 'py-2 px-4' : 'py-3 px-4';
+  const cellPad = compactDensity ? 'py-2.5 px-4' : 'py-3.5 px-4';
 
   const activeCount = useMemo(
     () => patients.filter((p) => p.administrativeStatus === 'Active').length,
@@ -243,70 +238,70 @@ export function PatientsView({
     <button
       type="button"
       onClick={() => toggleSort(field)}
-      className="inline-flex items-center gap-1 font-medium text-[#526259] hover:text-[#111C17] transition-colors"
+      className="inline-flex items-center gap-1 font-semibold text-[#6B7B73] hover:text-[#1C2B25] transition-colors"
       aria-label={`Sort by ${label} (${sortField === field ? sortDir : 'none'})`}
     >
       <span>{label}</span>
       <ArrowUpDown
-        className={`w-3 h-3 ${sortField === field ? 'text-[#059669]' : 'text-slate-400'}`}
+        className={`w-3 h-3 ${sortField === field ? 'text-[#137A55]' : 'text-[#9BA8A1]'}`}
         aria-hidden="true"
       />
     </button>
   );
 
   return (
-    <div className="space-y-5">
-      {/* Patient Directory Summary Strip */}
+    <div className="space-y-5 animate-view-enter">
+      {/* Directory Summary Strip */}
       <section className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <button
           type="button"
           onClick={() => setStatusFilter('All')}
-          className="text-left bg-[#0B261C] hover:bg-[#12382A] text-white rounded-xl p-4 transition-colors btn-press"
+          className="btn-press text-left rounded-[22px] bg-[#0F3D2E] hover:bg-[#144D3B] text-white p-5 transition-colors"
         >
-          <div className="text-xs font-medium text-emerald-200/85">Directory View</div>
-          <div className="text-2xl font-bold font-mono tabular-nums mt-1.5">
+          <div className="text-xs font-medium text-emerald-100/80">Patient Directory</div>
+          <div className="text-[28px] leading-none font-bold font-mono tabular-nums mt-2">
             {patients.length}
           </div>
-          <div className="text-[11px] text-emerald-100/75 mt-0.5">
-            Synthetic patient records matching filters
+          <div className="text-[11px] text-emerald-100/75 mt-1.5">
+            Total matching patient records
           </div>
         </button>
 
         <button
           type="button"
           onClick={() => setStatusFilter('Active')}
-          className="text-left card-surface card-interactive hover:border-[#059669] rounded-xl p-4 transition-colors btn-press"
+          className="btn-press text-left card-surface card-interactive rounded-[22px] p-5"
         >
-          <div className="text-xs font-medium text-[#526259]">Active Roster</div>
-          <div className="text-2xl font-bold font-mono tabular-nums text-[#047857] mt-1.5">
+          <div className="text-xs font-medium text-[#6B7B73]">Active Roster</div>
+          <div className="text-[28px] leading-none font-bold font-mono tabular-nums text-[#137A55] mt-2">
             {activeCount}
           </div>
-          <div className="text-[11px] text-[#526259] mt-0.5">
-            Verified for scheduling &amp; follow-up outreach
+          <div className="text-[11px] text-[#6B7B73] mt-1.5">
+            Verified for scheduling &amp; outreach
           </div>
         </button>
 
         <button
           type="button"
           onClick={() => setStatusFilter('Pending Verification')}
-          className="text-left card-surface card-interactive hover:border-[#059669] rounded-xl p-4 transition-colors btn-press"
+          className="btn-press text-left card-surface card-interactive rounded-[22px] p-5"
         >
-          <div className="text-xs font-medium text-[#526259]">Pending Verification</div>
-          <div className="text-2xl font-bold font-mono tabular-nums text-[#111C17] mt-1.5">
+          <div className="text-xs font-medium text-[#6B7B73]">Pending Verification</div>
+          <div className="text-[28px] leading-none font-bold font-mono tabular-nums text-[#1C2B25] mt-2">
             {pendingVerCount}
           </div>
-          <div className="text-[11px] text-[#526259] mt-0.5">
-            Administrative intake confirmation needed
+          <div className="text-[11px] text-[#6B7B73] mt-1.5">
+            Intake confirmation needed
           </div>
         </button>
       </section>
 
-      {/* Search & Filter Toolbar */}
-      <div className="card-surface rounded-xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+      {/* Search & Filter Pills Bar */}
+      <div className="card-surface rounded-[22px] p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3.5">
         <div className="flex flex-col sm:flex-row sm:items-center gap-3 flex-1">
           <div className="relative flex-1 max-w-md">
             <Search
-              className="w-4 h-4 text-[#526259] absolute left-3 top-1/2 -translate-y-1/2"
+              className="w-4 h-4 text-[#6B7B73] absolute left-3.5 top-1/2 -translate-y-1/2"
               aria-hidden="true"
             />
             <label htmlFor="patient-search-input" className="sr-only">
@@ -318,12 +313,12 @@ export function PatientsView({
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search by ID (e.g. P-1042), name, phone, or email..."
-              className="w-full pl-9 pr-3 py-2 text-sm border border-[#D4DAD4] rounded-lg focus:outline-none focus:border-[#059669]"
+              className="w-full pl-10 pr-4 py-2 text-sm bg-[#FAFBF9] border border-[#DCE8E0] rounded-full focus:bg-white focus:outline-none focus:border-[#34C38F]"
             />
           </div>
 
           <div
-            className="flex items-center gap-1 p-1 bg-[#F1F5F2] rounded-lg overflow-x-auto"
+            className="flex items-center gap-1 p-1 bg-[#EEF3EF] border border-[#DCE8E0] rounded-full overflow-x-auto"
             role="group"
             aria-label="Filter patients by administrative status"
           >
@@ -332,10 +327,10 @@ export function PatientsView({
                 key={tab}
                 type="button"
                 onClick={() => setStatusFilter(tab)}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                className={`px-3.5 py-1.5 text-xs font-semibold rounded-full transition-colors whitespace-nowrap shrink-0 ${
                   statusFilter === tab
-                    ? 'bg-white text-[#0B261C] shadow-xs'
-                    : 'text-[#526259] hover:text-[#111C17]'
+                    ? 'bg-[#0F3D2E] text-white shadow-xs'
+                    : 'text-[#6B7B73] hover:text-[#1C2B25]'
                 }`}
               >
                 {tab}
@@ -352,207 +347,210 @@ export function PatientsView({
             setFormError(null);
             setShowCreateModal(true);
           }}
-          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg transition-colors whitespace-nowrap shrink-0 btn-press disabled:opacity-50 disabled:cursor-not-allowed"
+          className="btn-press inline-flex items-center gap-2 px-4 py-2 text-xs sm:text-sm font-bold text-[#0F3D2E] bg-[#34C38F] hover:bg-[#2bb482] rounded-full transition-colors whitespace-nowrap shrink-0 disabled:opacity-50"
         >
           <Plus className="w-4 h-4" aria-hidden="true" />
           Register Patient
         </button>
       </div>
 
-      {/* Main Content Split */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        <div
-          className={`${
-            selectedDetail || detailLoading ? 'lg:col-span-7' : 'lg:col-span-12'
-          } card-surface rounded-xl overflow-hidden`}
-        >
-          <div className="px-5 py-3.5 border-b border-[#E3E8E4] flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-[#111C17]">
-              Synthetic Patient Directory
-            </h2>
-            <span className="text-xs font-mono tabular-nums text-[#526259]">
-              {sortedPatients.length} record{sortedPatients.length === 1 ? '' : 's'}
-            </span>
+      {/* Patient Directory Table */}
+      <div className="card-surface rounded-[24px] overflow-hidden">
+        <div className="px-6 py-4 border-b border-[#EEF3EF] flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-bold text-[#1C2B25]">Patient Directory</h2>
+            <p className="text-xs text-[#6B7B73] mt-0.5">
+              Select any patient to slide open their quick chart &amp; appointment history
+            </p>
           </div>
-
-          {loading ? (
-            <div className="p-5 space-y-3" aria-busy="true" aria-label="Loading patients">
-              {Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="flex items-center gap-3 p-2 rounded-lg bg-[#F6F8F6] animate-pulse">
-                  <div className="w-8 h-8 rounded-full bg-[#E3E8E4] shrink-0" />
-                  <div className="flex-1 space-y-1.5">
-                    <div className="h-3.5 w-40 bg-[#E3E8E4] rounded" />
-                    <div className="h-2.5 w-24 bg-[#EEF2EF] rounded" />
-                  </div>
-                  <div className="h-3.5 w-20 bg-[#E3E8E4] rounded" />
-                </div>
-              ))}
-            </div>
-          ) : loadError ? (
-            <div className="p-10 text-center space-y-3">
-              <AlertTriangle className="w-8 h-8 text-red-700 mx-auto" aria-hidden="true" />
-              <div className="space-y-1">
-                <p className="text-sm font-medium text-[#111C17]">Unable to load patient directory</p>
-                <p className="text-xs text-[#526259] max-w-md mx-auto">{loadError}</p>
-              </div>
-              <button
-                type="button"
-                onClick={loadPatients}
-                className="px-4 py-2 text-xs font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg btn-press"
-              >
-                Retry
-              </button>
-            </div>
-          ) : sortedPatients.length === 0 ? (
-            <div className="p-10 text-center space-y-3">
-              <ClinicEmptyIllustration variant={search ? 'search' : 'patients'} />
-              <div className="space-y-1">
-                <p className="text-sm font-medium text-[#111C17]">
-                  No patient records match your filter
-                </p>
-                <p className="text-xs text-[#526259]">
-                  Adjust your search query, reset status filters, or register a new synthetic patient.
-                </p>
-              </div>
-              <div className="flex items-center justify-center gap-2 pt-1">
-                {(search || statusFilter !== 'All') && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSearch('');
-                      setStatusFilter('All');
-                    }}
-                    className="px-3.5 py-1.5 text-xs font-medium text-[#111C17] bg-white hover:bg-[#F6F8F6] border border-[#D4DAD4] rounded-lg transition-colors btn-press"
-                  >
-                    Clear Filters
-                  </button>
-                )}
-                {canWrite && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setFormError(null);
-                      setShowCreateModal(true);
-                    }}
-                    className="px-3.5 py-1.5 text-xs font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg transition-colors btn-press"
-                  >
-                    Register Patient
-                  </button>
-                )}
-              </div>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="border-b border-[#E3E8E4] bg-[#F6F8F6] text-xs">
-                    <th className="py-2.5 px-4">{renderSortHeader('Patient ID', 'id')}</th>
-                    <th className="py-2.5 px-4">{renderSortHeader('Full Name', 'fullName')}</th>
-                    {!(selectedDetail || detailLoading) && (
-                      <>
-                        <th className="py-2.5 px-4">{renderSortHeader('Date of Birth', 'dateOfBirth')}</th>
-                        <th className="py-2.5 px-4 font-medium text-[#526259]">Contact</th>
-                        <th className="py-2.5 px-4">{renderSortHeader('Registered', 'registrationDate')}</th>
-                      </>
-                    )}
-                    <th className="py-2.5 px-4">{renderSortHeader('Status', 'administrativeStatus')}</th>
-                    <th className="py-2.5 px-4 text-right font-medium text-[#526259]">Profile</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#EEF2EF] text-sm">
-                  {sortedPatients.map((patient) => (
-                    <tr
-                      key={patient.id}
-                      className={`hover:bg-[#F6F8F6] transition-colors ${
-                        selectedDetail?.id === patient.id ? 'bg-[#ECF4EF]/75' : ''
-                      }`}
-                    >
-                      <td className={`${cellPad} font-mono tabular-nums text-xs font-semibold text-[#0B261C] whitespace-nowrap`}>
-                        {patient.id}
-                      </td>
-                      <td className={`${cellPad} font-medium text-[#111C17]`}>
-                        <div className="flex items-center gap-2.5">
-                          <EditorialAvatar name={patient.fullName} role="patient" size="sm" />
-                          <div className="min-w-0">
-                            <button
-                              type="button"
-                              onClick={() => handleSelectPatient(patient.id)}
-                              className="text-left hover:text-[#047857] hover:underline"
-                            >
-                              {patient.fullName}
-                            </button>
-                            {(selectedDetail || detailLoading) && (
-                              <div className="text-[11px] font-mono text-[#526259] mt-0.5">
-                                {patient.contactNumber}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      </td>
-                      {!(selectedDetail || detailLoading) && (
-                        <>
-                          <td className={`${cellPad} font-mono tabular-nums text-xs text-[#526259] whitespace-nowrap`}>
-                            {patient.dateOfBirth}
-                          </td>
-                          <td className={`${cellPad} text-xs text-[#526259]`}>
-                            <div className="font-mono tabular-nums text-[#111C17]">{patient.contactNumber}</div>
-                            <div>{patient.email}</div>
-                          </td>
-                          <td className={`${cellPad} font-mono tabular-nums text-xs text-[#526259] whitespace-nowrap`}>
-                            {patient.registrationDate}
-                          </td>
-                        </>
-                      )}
-                      <td className={cellPad}>
-                        <AdminStatusText status={patient.administrativeStatus} />
-                      </td>
-                      <td className={`${cellPad} text-right`}>
-                        <button
-                          type="button"
-                          onClick={() => handleSelectPatient(patient.id)}
-                          className="inline-flex items-center gap-1 text-xs font-medium text-[#047857] hover:text-[#0B261C] whitespace-nowrap"
-                          aria-label={`Open dedicated profile for ${patient.fullName} (${patient.id})`}
-                        >
-                          <span>Open Profile</span>
-                          <ArrowUpRight className="w-3.5 h-3.5" aria-hidden="true" />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+          <span className="text-xs font-mono tabular-nums text-[#6B7B73]">
+            {sortedPatients.length} record{sortedPatients.length === 1 ? '' : 's'}
+          </span>
         </div>
 
-        {/* Individual Patient Profile Panel */}
-        {(selectedDetail || detailLoading) && (
-          <aside className="lg:col-span-5 lg:sticky lg:top-20 card-surface rounded-xl p-5 space-y-5 animate-view-enter">
+        {loading ? (
+          <div className="p-5 space-y-3" aria-busy="true" aria-label="Loading patients">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div
+                key={i}
+                className="flex items-center gap-3 p-3 rounded-2xl bg-[#FAFBF9] animate-pulse"
+              >
+                <div className="w-9 h-9 rounded-full bg-[#DCE8E0] shrink-0" />
+                <div className="flex-1 space-y-1.5">
+                  <div className="h-3.5 w-40 bg-[#DCE8E0] rounded" />
+                  <div className="h-2.5 w-24 bg-[#EEF3EF] rounded" />
+                </div>
+                <div className="h-5 w-20 bg-[#DCE8E0] rounded-full" />
+              </div>
+            ))}
+          </div>
+        ) : loadError ? (
+          <div className="p-10 text-center space-y-3">
+            <AlertTriangle className="w-8 h-8 text-rose-700 mx-auto" aria-hidden="true" />
+            <div className="space-y-1">
+              <p className="text-sm font-semibold text-[#1C2B25]">Unable to load patient directory</p>
+              <p className="text-xs text-[#6B7B73] max-w-md mx-auto">{loadError}</p>
+            </div>
+            <button
+              type="button"
+              onClick={loadPatients}
+              className="btn-press px-4 py-2 text-xs font-bold text-[#0F3D2E] bg-[#34C38F] rounded-full"
+            >
+              Retry
+            </button>
+          </div>
+        ) : sortedPatients.length === 0 ? (
+          <div className="p-10 text-center space-y-3">
+            <ClinicEmptyIllustration variant={search ? 'search' : 'patients'} />
+            <div className="space-y-1">
+              <p className="text-sm font-semibold text-[#1C2B25]">
+                No patient records match your filter
+              </p>
+              <p className="text-xs text-[#6B7B73]">
+                Adjust your search query, reset status filters, or register a new patient.
+              </p>
+            </div>
+            <div className="flex items-center justify-center gap-2 pt-1">
+              {(search || statusFilter !== 'All') && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearch('');
+                    setStatusFilter('All');
+                  }}
+                  className="btn-press px-4 py-2 text-xs font-semibold text-[#1C2B25] bg-[#FAFBF9] hover:bg-[#EEF3EF] border border-[#DCE8E0] rounded-full"
+                >
+                  Clear Filters
+                </button>
+              )}
+              {canWrite && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFormError(null);
+                    setShowCreateModal(true);
+                  }}
+                  className="btn-press px-4 py-2 text-xs font-bold text-[#0F3D2E] bg-[#34C38F] rounded-full"
+                >
+                  Register Patient
+                </button>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="border-b border-[#EEF3EF] bg-[#FAFBF9] text-xs">
+                  <th className="py-3 px-4">{renderSortHeader('Patient ID', 'id')}</th>
+                  <th className="py-3 px-4">{renderSortHeader('Patient', 'fullName')}</th>
+                  <th className="py-3 px-4">{renderSortHeader('Date of Birth', 'dateOfBirth')}</th>
+                  <th className="py-3 px-4 font-semibold text-[#6B7B73]">Contact</th>
+                  <th className="py-3 px-4">{renderSortHeader('Registered', 'registrationDate')}</th>
+                  <th className="py-3 px-4">{renderSortHeader('Status', 'administrativeStatus')}</th>
+                  <th className="py-3 px-4 text-right font-semibold text-[#6B7B73]">Profile</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#EEF3EF] text-sm">
+                {sortedPatients.map((patient) => (
+                  <tr
+                    key={patient.id}
+                    className={`hover:bg-[#F5F9F6] transition-colors ${
+                      selectedDetail?.id === patient.id ? 'bg-[#E9F5EE]/75' : ''
+                    }`}
+                  >
+                    <td
+                      className={`${cellPad} font-mono tabular-nums text-xs font-semibold text-[#0F3D2E] whitespace-nowrap`}
+                    >
+                      {patient.id}
+                    </td>
+                    <td className={`${cellPad} font-semibold text-[#1C2B25]`}>
+                      <div className="flex items-center gap-3">
+                        <EditorialAvatar name={patient.fullName} role="patient" size="sm" />
+                        <button
+                          type="button"
+                          onClick={() => handleOpenDrawer(patient.id)}
+                          className="text-left hover:text-[#137A55] hover:underline"
+                        >
+                          {patient.fullName}
+                        </button>
+                      </div>
+                    </td>
+                    <td
+                      className={`${cellPad} font-mono tabular-nums text-xs text-[#6B7B73] whitespace-nowrap`}
+                    >
+                      {patient.dateOfBirth}
+                    </td>
+                    <td className={`${cellPad} text-xs text-[#6B7B73]`}>
+                      <div className="font-mono tabular-nums text-[#1C2B25]">
+                        {patient.contactNumber}
+                      </div>
+                      <div className="truncate max-w-[190px]">{patient.email}</div>
+                    </td>
+                    <td
+                      className={`${cellPad} font-mono tabular-nums text-xs text-[#6B7B73] whitespace-nowrap`}
+                    >
+                      {patient.registrationDate}
+                    </td>
+                    <td className={cellPad}>
+                      <AdminStatusText status={patient.administrativeStatus} />
+                    </td>
+                    <td className={`${cellPad} text-right`}>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenDrawer(patient.id)}
+                        className="btn-press inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold text-[#0F3D2E] bg-[#EEF3EF] hover:bg-[#DCE8E0] whitespace-nowrap"
+                        aria-label={`Inspect ${patient.fullName} (${patient.id})`}
+                      >
+                        <span>Inspect</span>
+                        <ArrowUpRight className="w-3.5 h-3.5" aria-hidden="true" />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Slide-in Side Drawer for Profile & Appointment History */}
+      {(selectedDetail || detailLoading) && (
+        <div className="fixed inset-0 z-40 flex justify-end">
+          <div
+            className="fixed inset-0 bg-[#0F3D2E]/30 backdrop-blur-[1px] animate-modal-overlay"
+            onClick={() => setSelectedDetail(null)}
+            aria-hidden="true"
+          />
+          <aside
+            aria-label="Patient profile drawer"
+            className="relative z-10 w-full max-w-md h-full bg-[#FAFBF9] border-l border-[#DCE8E0] shadow-2xl overflow-y-auto p-6 space-y-5 animate-drawer-right"
+          >
             {detailLoading ? (
               <div className="space-y-4">
-                <div className="flex items-center gap-3 pb-4 border-b border-[#E3E8E4]">
-                  <div className="w-10 h-10 rounded-full bg-[#E3E8E4]" />
+                <div className="flex items-center gap-3 pb-4 border-b border-[#DCE8E0]">
+                  <div className="w-11 h-11 rounded-full bg-[#DCE8E0] animate-pulse" />
                   <div className="space-y-2 flex-1">
-                    <div className="h-3 w-28 bg-[#EEF2EF] rounded" />
-                    <div className="h-4 w-44 bg-[#E3E8E4] rounded" />
+                    <div className="h-3 w-28 bg-[#EEF3EF] rounded animate-pulse" />
+                    <div className="h-4 w-44 bg-[#DCE8E0] rounded animate-pulse" />
                   </div>
                 </div>
-                <div className="h-32 bg-[#F6F8F6] rounded-lg" />
+                <div className="h-32 bg-white rounded-2xl border border-[#DCE8E0] animate-pulse" />
               </div>
             ) : (
               selectedDetail && (
                 <>
-                  <div className="flex items-start justify-between gap-3 border-b border-[#E3E8E4] pb-4">
+                  <div className="flex items-start justify-between gap-3 border-b border-[#DCE8E0] pb-4">
                     <div className="flex items-start gap-3">
                       <EditorialAvatar name={selectedDetail.fullName} role="patient" size="md" />
                       <div>
-                        <div className="text-xs font-mono text-[#526259]">
-                          {selectedDetail.id} · Registered {selectedDetail.registrationDate}
+                        <div className="text-xs font-mono text-[#6B7B73]">
+                          {selectedDetail.id} · Since {selectedDetail.registrationDate}
                         </div>
-                        <h3 className="text-lg font-semibold text-[#111C17] mt-0.5">
+                        <h3 className="text-lg font-bold text-[#1C2B25] mt-0.5">
                           {selectedDetail.fullName}
                         </h3>
-                        <div className="mt-1">
+                        <div className="mt-1.5">
                           <AdminStatusText status={selectedDetail.administrativeStatus} />
                         </div>
                       </div>
@@ -560,71 +558,88 @@ export function PatientsView({
                     <button
                       type="button"
                       onClick={() => setSelectedDetail(null)}
-                      className="p-1.5 text-[#526259] hover:text-[#111C17] rounded-md"
-                      aria-label="Close patient details"
+                      className="p-2 text-[#6B7B73] hover:text-[#1C2B25] rounded-full hover:bg-[#EEF3EF]"
+                      aria-label="Close patient drawer"
                     >
                       <X className="w-4 h-4" aria-hidden="true" />
                     </button>
                   </div>
 
-                  <dl className="grid grid-cols-2 gap-3 text-xs">
+                  <dl className="grid grid-cols-2 gap-3 text-xs bg-white border border-[#DCE8E0] rounded-[20px] p-4">
                     <div>
-                      <dt className="text-[#526259]">Date of Birth</dt>
-                      <dd className="font-mono tabular-nums font-medium text-[#111C17] mt-0.5">
+                      <dt className="text-[#6B7B73]">Date of Birth</dt>
+                      <dd className="font-mono tabular-nums font-semibold text-[#1C2B25] mt-0.5">
                         {selectedDetail.dateOfBirth}
                       </dd>
                     </div>
                     <div>
-                      <dt className="text-[#526259]">Contact Number</dt>
-                      <dd className="font-mono tabular-nums font-medium text-[#111C17] mt-0.5">
+                      <dt className="text-[#6B7B73]">Contact Number</dt>
+                      <dd className="font-mono tabular-nums font-semibold text-[#1C2B25] mt-0.5">
                         {selectedDetail.contactNumber}
                       </dd>
                     </div>
-                    <div className="col-span-2">
-                      <dt className="text-[#526259]">Email Address</dt>
-                      <dd className="font-medium text-[#111C17] mt-0.5">
+                    <div className="col-span-2 pt-2 border-t border-[#EEF3EF]">
+                      <dt className="text-[#6B7B73]">Email Address</dt>
+                      <dd className="font-medium text-[#1C2B25] mt-0.5">
                         {selectedDetail.email}
                       </dd>
                     </div>
                   </dl>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    <button
-                      type="button"
-                      onClick={() => openEditPatientModal(selectedDetail)}
-                      className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-medium text-[#111C17] bg-white hover:bg-[#F6F8F6] border border-[#D4DAD4] rounded-lg transition-colors btn-press"
-                    >
-                      <Pencil className="w-3.5 h-3.5 text-[#047857]" aria-hidden="true" />
-                      Edit Patient Info
-                    </button>
+                  <div className="flex flex-wrap gap-2">
+                    {canWrite && (
+                      <button
+                        type="button"
+                        onClick={() => openEditPatientModal(selectedDetail)}
+                        className="btn-press flex-1 inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-[#1C2B25] bg-white hover:bg-[#EEF3EF] border border-[#DCE8E0] rounded-full"
+                      >
+                        <Pencil className="w-3.5 h-3.5 text-[#137A55]" aria-hidden="true" />
+                        Edit Info
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => onQuickScheduleForPatient(selectedDetail.id)}
-                      className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-medium text-[#0B261C] bg-[#ECF4EF] hover:bg-[#D7E6DD] rounded-lg transition-colors btn-press"
+                      className="btn-press flex-1 inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-bold text-[#0F3D2E] bg-[#34C38F] hover:bg-[#2bb482] rounded-full"
                     >
-                      <CalendarPlus className="w-3.5 h-3.5 text-[#047857]" aria-hidden="true" />
+                      <CalendarPlus className="w-3.5 h-3.5" aria-hidden="true" />
                       Schedule Visit
                     </button>
+                    {onOpenPatient && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const pid = selectedDetail.id;
+                          setSelectedDetail(null);
+                          onOpenPatient(pid);
+                        }}
+                        className="btn-press w-full inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-[#0F3D2E] hover:bg-[#144D3B] rounded-full"
+                      >
+                        Open Full Patient Chart
+                        <ArrowUpRight className="w-3.5 h-3.5" aria-hidden="true" />
+                      </button>
+                    )}
                   </div>
 
-                  <div className="border-t border-[#E3E8E4] pt-4">
-                    <h4 className="text-xs font-semibold text-[#111C17] mb-2.5">
-                      Appointments ({selectedDetail.appointments.length})
+                  {/* Appointment History */}
+                  <div className="bg-white border border-[#DCE8E0] rounded-[20px] p-4 space-y-2.5">
+                    <h4 className="text-xs font-bold text-[#1C2B25]">
+                      Appointment History ({selectedDetail.appointments.length})
                     </h4>
                     {selectedDetail.appointments.length === 0 ? (
-                      <p className="text-xs text-[#526259]">No appointments on file.</p>
+                      <p className="text-xs text-[#6B7B73]">No appointments on file.</p>
                     ) : (
-                      <div className="divide-y divide-[#EEF2EF] max-h-48 overflow-y-auto">
+                      <div className="divide-y divide-[#EEF3EF] max-h-56 overflow-y-auto">
                         {selectedDetail.appointments.map((apt) => (
                           <div
                             key={apt.id}
                             className="py-2.5 text-xs flex items-center justify-between gap-2"
                           >
-                            <div>
-                              <div className="font-mono tabular-nums font-medium text-[#111C17]">
-                                {apt.appointmentDate} {apt.appointmentTime} · {apt.id}
+                            <div className="min-w-0">
+                              <div className="font-mono tabular-nums font-semibold text-[#1C2B25]">
+                                {apt.appointmentDate} · {apt.appointmentTime}
                               </div>
-                              <div className="text-[#526259] mt-0.5">
+                              <div className="text-[#6B7B73] truncate mt-0.5">
                                 {apt.department} · {apt.clinician}
                               </div>
                             </div>
@@ -635,26 +650,24 @@ export function PatientsView({
                     )}
                   </div>
 
-                  <div className="border-t border-[#E3E8E4] pt-4">
-                    <h4 className="text-xs font-semibold text-[#111C17] mb-2.5">
-                      Administrative Follow-ups ({selectedDetail.followups.length})
+                  {/* Administrative Follow-ups */}
+                  <div className="bg-white border border-[#DCE8E0] rounded-[20px] p-4 space-y-2.5">
+                    <h4 className="text-xs font-bold text-[#1C2B25]">
+                      Follow-up Tasks ({selectedDetail.followups.length})
                     </h4>
                     {selectedDetail.followups.length === 0 ? (
-                      <p className="text-xs text-[#526259]">No follow-up tasks linked.</p>
+                      <p className="text-xs text-[#6B7B73]">No follow-up tasks linked.</p>
                     ) : (
-                      <div className="divide-y divide-[#EEF2EF] max-h-40 overflow-y-auto">
+                      <div className="divide-y divide-[#EEF3EF] max-h-48 overflow-y-auto">
                         {selectedDetail.followups.map((fu) => (
-                          <div
-                            key={fu.id}
-                            className="py-2.5 text-xs"
-                          >
+                          <div key={fu.id} className="py-2.5 text-xs space-y-1">
                             <div className="flex items-center justify-between gap-2">
-                              <span className="font-mono font-medium text-[#111C17]">
+                              <span className="font-mono font-semibold text-[#1C2B25]">
                                 {fu.id} · Due {fu.dueDate}
                               </span>
                               <FollowUpStatusText status={fu.status} />
                             </div>
-                            <p className="text-[#526259] mt-1">{fu.description}</p>
+                            <p className="text-[#6B7B73]">{fu.description}</p>
                           </div>
                         ))}
                       </div>
@@ -664,8 +677,8 @@ export function PatientsView({
               )
             )}
           </aside>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Register New Patient Modal */}
       <ModalShell
@@ -674,126 +687,126 @@ export function PatientsView({
         labelledBy="register-patient-title"
         maxWidthClass="max-w-lg"
       >
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 id="register-patient-title" className="text-base font-semibold text-[#16211C]">
-                  Register Synthetic Patient
-                </h3>
-                <p className="text-xs text-[#526058] mt-0.5">
-                  Use fictional demonstration details only. No real patient data.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowCreateModal(false)}
-                className="p-1 text-[#526058] hover:text-[#16211C]"
-                aria-label="Close register patient dialog"
-              >
-                <X className="w-4 h-4" aria-hidden="true" />
-              </button>
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 id="register-patient-title" className="text-base font-bold text-[#1C2B25]">
+              Register Patient
+            </h3>
+            <p className="text-xs text-[#6B7B73] mt-0.5">
+              Add a new patient profile to this clinic directory.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowCreateModal(false)}
+            className="p-1.5 text-[#6B7B73] hover:text-[#1C2B25] rounded-full hover:bg-[#EEF3EF]"
+            aria-label="Close register patient dialog"
+          >
+            <X className="w-4 h-4" aria-hidden="true" />
+          </button>
+        </div>
+
+        {formError && (
+          <div className="p-3 text-xs text-rose-800 bg-rose-50 border border-rose-200 rounded-2xl">
+            {formError}
+          </div>
+        )}
+
+        <form onSubmit={handleRegisterSubmit} className="space-y-4">
+          <div>
+            <label htmlFor="reg-full-name" className="block text-xs font-semibold text-[#1C2B25] mb-1">
+              Full Name
+            </label>
+            <input
+              id="reg-full-name"
+              type="text"
+              required
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              placeholder="e.g. Lydia Alverez"
+              className="w-full px-3.5 py-2 text-sm bg-white border border-[#DCE8E0] rounded-xl"
+            />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label htmlFor="reg-dob" className="block text-xs font-semibold text-[#1C2B25] mb-1">
+                Date of Birth
+              </label>
+              <input
+                id="reg-dob"
+                type="date"
+                required
+                value={dateOfBirth}
+                onChange={(e) => setDateOfBirth(e.target.value)}
+                className="w-full px-3.5 py-2 text-sm bg-white border border-[#DCE8E0] rounded-xl"
+              />
             </div>
+            <div>
+              <label htmlFor="reg-phone" className="block text-xs font-semibold text-[#1C2B25] mb-1">
+                Contact Number
+              </label>
+              <input
+                id="reg-phone"
+                type="tel"
+                required
+                value={contactNumber}
+                onChange={(e) => setContactNumber(e.target.value)}
+                placeholder="+1-555-0190"
+                className="w-full px-3.5 py-2 text-sm bg-white border border-[#DCE8E0] rounded-xl"
+              />
+            </div>
+          </div>
 
-            {formError && (
-              <div className="p-3 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg">
-                {formError}
-              </div>
-            )}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label htmlFor="reg-email" className="block text-xs font-semibold text-[#1C2B25] mb-1">
+                Email
+              </label>
+              <input
+                id="reg-email"
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="lydia.alverez@example.org"
+                className="w-full px-3.5 py-2 text-sm bg-white border border-[#DCE8E0] rounded-xl"
+              />
+            </div>
+            <div>
+              <label htmlFor="reg-status" className="block text-xs font-semibold text-[#1C2B25] mb-1">
+                Administrative Status
+              </label>
+              <select
+                id="reg-status"
+                value={adminStatus}
+                onChange={(e) => setAdminStatus(e.target.value as AdministrativeStatus)}
+                className="w-full px-3.5 py-2 text-sm border border-[#DCE8E0] rounded-xl bg-white"
+              >
+                <option value="Active">Active</option>
+                <option value="Pending Verification">Pending Verification</option>
+                <option value="Inactive">Inactive</option>
+              </select>
+            </div>
+          </div>
 
-            <form onSubmit={handleRegisterSubmit} className="space-y-4">
-              <div>
-                <label htmlFor="reg-full-name" className="block text-xs font-medium text-[#16211C] mb-1">
-                  Full Name
-                </label>
-                <input
-                  id="reg-full-name"
-                  type="text"
-                  required
-                  value={fullName}
-                  onChange={(e) => setFullName(e.target.value)}
-                  placeholder="e.g. Lydia Alverez"
-                  className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg"
-                />
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label htmlFor="reg-dob" className="block text-xs font-medium text-[#16211C] mb-1">
-                    Date of Birth
-                  </label>
-                  <input
-                    id="reg-dob"
-                    type="date"
-                    required
-                    value={dateOfBirth}
-                    onChange={(e) => setDateOfBirth(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="reg-phone" className="block text-xs font-medium text-[#16211C] mb-1">
-                    Contact Number
-                  </label>
-                  <input
-                    id="reg-phone"
-                    type="tel"
-                    required
-                    value={contactNumber}
-                    onChange={(e) => setContactNumber(e.target.value)}
-                    placeholder="+1-555-0190"
-                    className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label htmlFor="reg-email" className="block text-xs font-medium text-[#16211C] mb-1">
-                    Email
-                  </label>
-                  <input
-                    id="reg-email"
-                    type="email"
-                    required
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="lydia.alverez@example.org"
-                    className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="reg-status" className="block text-xs font-medium text-[#16211C] mb-1">
-                    Administrative Status
-                  </label>
-                  <select
-                    id="reg-status"
-                    value={adminStatus}
-                    onChange={(e) => setAdminStatus(e.target.value as AdministrativeStatus)}
-                    className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg bg-white"
-                  >
-                    <option value="Active">Active</option>
-                    <option value="Pending Verification">Pending Verification</option>
-                    <option value="Inactive">Inactive</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-end gap-3 pt-2 border-t border-[#E4E7E2]">
-                <button
-                  type="button"
-                  onClick={() => setShowCreateModal(false)}
-                  className="px-4 py-2 text-sm font-medium text-[#526058] hover:text-[#16211C] border border-[#E4E7E2] rounded-lg"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={submitting}
-                  className="px-4 py-2 text-sm font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg disabled:opacity-50 btn-press"
-                >
-                  {submitting ? 'Registering...' : 'Register Patient'}
-                </button>
-              </div>
-            </form>
+          <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-[#DCE8E0]">
+            <button
+              type="button"
+              onClick={() => setShowCreateModal(false)}
+              className="btn-press px-4 py-2 text-xs font-semibold text-[#6B7B73] hover:text-[#1C2B25] border border-[#DCE8E0] rounded-full"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={submitting}
+              className="btn-press px-5 py-2 text-xs font-bold text-[#0F3D2E] bg-[#34C38F] hover:bg-[#2bb482] rounded-full disabled:opacity-50"
+            >
+              {submitting ? 'Registering...' : 'Register Patient'}
+            </button>
+          </div>
+        </form>
       </ModalShell>
 
       {/* Edit Existing Patient Modal */}
@@ -803,123 +816,123 @@ export function PatientsView({
         labelledBy="edit-patient-title"
         maxWidthClass="max-w-lg"
       >
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 id="edit-patient-title" className="text-base font-semibold text-[#16211C]">
-                  Edit Patient Record · {selectedDetail?.id}
-                </h3>
-                <p className="text-xs text-[#526058] mt-0.5">
-                  Changes persist directly to CareDesk&apos;s relational patient directory.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowEditModal(false)}
-                className="p-1 text-[#526058] hover:text-[#16211C]"
-                aria-label="Close edit patient dialog"
-              >
-                <X className="w-4 h-4" aria-hidden="true" />
-              </button>
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 id="edit-patient-title" className="text-base font-bold text-[#1C2B25]">
+              Edit Patient Record · {selectedDetail?.id}
+            </h3>
+            <p className="text-xs text-[#6B7B73] mt-0.5">
+              Updates save directly to the clinic patient directory.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowEditModal(false)}
+            className="p-1.5 text-[#6B7B73] hover:text-[#1C2B25] rounded-full hover:bg-[#EEF3EF]"
+            aria-label="Close edit patient dialog"
+          >
+            <X className="w-4 h-4" aria-hidden="true" />
+          </button>
+        </div>
+
+        {editError && (
+          <div className="p-3 text-xs text-rose-800 bg-rose-50 border border-rose-200 rounded-2xl">
+            {editError}
+          </div>
+        )}
+
+        <form onSubmit={handleEditPatientSubmit} className="space-y-4">
+          <div>
+            <label htmlFor="edit-full-name" className="block text-xs font-semibold text-[#1C2B25] mb-1">
+              Full Name
+            </label>
+            <input
+              id="edit-full-name"
+              type="text"
+              required
+              value={editFullName}
+              onChange={(e) => setEditFullName(e.target.value)}
+              className="w-full px-3.5 py-2 text-sm bg-white border border-[#DCE8E0] rounded-xl"
+            />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label htmlFor="edit-dob" className="block text-xs font-semibold text-[#1C2B25] mb-1">
+                Date of Birth
+              </label>
+              <input
+                id="edit-dob"
+                type="date"
+                required
+                value={editDob}
+                onChange={(e) => setEditDob(e.target.value)}
+                className="w-full px-3.5 py-2 text-sm bg-white border border-[#DCE8E0] rounded-xl"
+              />
             </div>
+            <div>
+              <label htmlFor="edit-phone" className="block text-xs font-semibold text-[#1C2B25] mb-1">
+                Contact Number
+              </label>
+              <input
+                id="edit-phone"
+                type="tel"
+                required
+                value={editContact}
+                onChange={(e) => setEditContact(e.target.value)}
+                className="w-full px-3.5 py-2 text-sm bg-white border border-[#DCE8E0] rounded-xl"
+              />
+            </div>
+          </div>
 
-            {editError && (
-              <div className="p-3 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg">
-                {editError}
-              </div>
-            )}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label htmlFor="edit-email" className="block text-xs font-semibold text-[#1C2B25] mb-1">
+                Email
+              </label>
+              <input
+                id="edit-email"
+                type="email"
+                required
+                value={editEmail}
+                onChange={(e) => setEditEmail(e.target.value)}
+                className="w-full px-3.5 py-2 text-sm bg-white border border-[#DCE8E0] rounded-xl"
+              />
+            </div>
+            <div>
+              <label htmlFor="edit-status" className="block text-xs font-semibold text-[#1C2B25] mb-1">
+                Administrative Status
+              </label>
+              <select
+                id="edit-status"
+                value={editStatus}
+                onChange={(e) => setEditStatus(e.target.value as AdministrativeStatus)}
+                className="w-full px-3.5 py-2 text-sm border border-[#DCE8E0] rounded-xl bg-white"
+              >
+                <option value="Active">Active</option>
+                <option value="Pending Verification">Pending Verification</option>
+                <option value="Inactive">Inactive</option>
+              </select>
+            </div>
+          </div>
 
-            <form onSubmit={handleEditPatientSubmit} className="space-y-4">
-              <div>
-                <label htmlFor="edit-full-name" className="block text-xs font-medium text-[#16211C] mb-1">
-                  Full Name
-                </label>
-                <input
-                  id="edit-full-name"
-                  type="text"
-                  required
-                  value={editFullName}
-                  onChange={(e) => setEditFullName(e.target.value)}
-                  className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg"
-                />
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label htmlFor="edit-dob" className="block text-xs font-medium text-[#16211C] mb-1">
-                    Date of Birth
-                  </label>
-                  <input
-                    id="edit-dob"
-                    type="date"
-                    required
-                    value={editDob}
-                    onChange={(e) => setEditDob(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="edit-phone" className="block text-xs font-medium text-[#16211C] mb-1">
-                    Contact Number
-                  </label>
-                  <input
-                    id="edit-phone"
-                    type="tel"
-                    required
-                    value={editContact}
-                    onChange={(e) => setEditContact(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label htmlFor="edit-email" className="block text-xs font-medium text-[#16211C] mb-1">
-                    Email
-                  </label>
-                  <input
-                    id="edit-email"
-                    type="email"
-                    required
-                    value={editEmail}
-                    onChange={(e) => setEditEmail(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="edit-status" className="block text-xs font-medium text-[#16211C] mb-1">
-                    Administrative Status
-                  </label>
-                  <select
-                    id="edit-status"
-                    value={editStatus}
-                    onChange={(e) => setEditStatus(e.target.value as AdministrativeStatus)}
-                    className="w-full px-3 py-2 text-sm border border-[#D4DAD4] rounded-lg bg-white"
-                  >
-                    <option value="Active">Active</option>
-                    <option value="Pending Verification">Pending Verification</option>
-                    <option value="Inactive">Inactive</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-end gap-3 pt-2 border-t border-[#E4E7E2]">
-                <button
-                  type="button"
-                  onClick={() => setShowEditModal(false)}
-                  className="px-4 py-2 text-sm font-medium text-[#526058] hover:text-[#16211C] border border-[#E4E7E2] rounded-lg"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={editSubmitting}
-                  className="px-4 py-2 text-sm font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg disabled:opacity-50 btn-press"
-                >
-                  {editSubmitting ? 'Saving Changes...' : 'Save Patient Info'}
-                </button>
-              </div>
-            </form>
+          <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-[#DCE8E0]">
+            <button
+              type="button"
+              onClick={() => setShowEditModal(false)}
+              className="btn-press px-4 py-2 text-xs font-semibold text-[#6B7B73] hover:text-[#1C2B25] border border-[#DCE8E0] rounded-full"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={editSubmitting}
+              className="btn-press px-5 py-2 text-xs font-bold text-[#0F3D2E] bg-[#34C38F] hover:bg-[#2bb482] rounded-full disabled:opacity-50"
+            >
+              {editSubmitting ? 'Saving...' : 'Save Changes'}
+            </button>
+          </div>
+        </form>
       </ModalShell>
     </div>
   );

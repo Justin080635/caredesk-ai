@@ -31,7 +31,7 @@ export function ModalShell({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-950/50 backdrop-blur-[1px] flex items-center justify-center p-4 animate-modal-overlay"
+      className="fixed inset-0 z-50 bg-[#0F3D2E]/40 backdrop-blur-[2px] flex items-center justify-center p-4 animate-modal-overlay"
       role="dialog"
       aria-modal="true"
       aria-labelledby={labelledBy}
@@ -42,7 +42,7 @@ export function ModalShell({
       }}
     >
       <div
-        className={`bg-white border border-[#E3E8E4] rounded-xl w-full ${maxWidthClass} p-6 space-y-4 shadow-xl max-h-[90vh] overflow-y-auto animate-modal-panel`}
+        className={`bg-[#FAFBF9] border border-[#DCE8E0] rounded-[24px] w-full ${maxWidthClass} p-6 space-y-4 shadow-xl max-h-[90vh] overflow-y-auto animate-modal-panel`}
       >
         {children}
       </div>

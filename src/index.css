@@ -4,26 +4,21 @@
   :root {
     --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
     --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
-    --forest-950: #071D15;
-    --forest-900: #0B261C;
-    --forest-800: #12382A;
-    --forest-700: #1A4D3A;
-    --emerald-600: #059669;
-    --emerald-700: #047857;
-    --sage-50: #F4F8F5;
-    --sage-100: #ECF4EF;
-    --sage-200: #D4E4DA;
-    --surface-canvas: #F6F8F6;
-    --surface-card: #FFFFFF;
-    --border-hairline: #E3E8E4;
-    --ink-primary: #111C17;
-    --ink-secondary: #34433B;
-    --ink-muted: #526259;
+    --canvas-sage: #EEF3EF;
+    --shell-surface: #FAFBF9;
+    --forest: #0F3D2E;
+    --forest-deep: #09291E;
+    --emerald-brand: #34C38F;
+    --emerald-ink: #137A55;
+    --sage-border: #DCE8E0;
+    --sage-soft: #E9F1EC;
+    --ink-primary: #1C2B25;
+    --ink-muted: #6B7B73;
   }
 
   body {
     font-family: var(--font-sans);
-    background-color: var(--surface-canvas);
+    background-color: var(--canvas-sage);
     color: var(--ink-primary);
   }
 
@@ -44,7 +39,7 @@
   input:focus-visible,
   select:focus-visible,
   textarea:focus-visible {
-    outline: 2px solid #059669;
+    outline: 2px solid #34C38F;
     outline-offset: 2px;
   }
 }
@@ -53,10 +48,24 @@
   font-variant-numeric: tabular-nums;
 }
 
+.shell-frame {
+  background-color: #FAFBF9;
+  border: 1px solid #DCE8E0;
+  border-radius: 24px;
+  box-shadow:
+    0 14px 40px -18px rgba(15, 61, 46, 0.10),
+    0 2px 8px -2px rgba(15, 61, 46, 0.04);
+}
+
 .card-surface {
-  background-color: #ffffff;
-  border: 1px solid #e3e8e4;
-  box-shadow: 0 1px 2px rgba(11, 38, 28, 0.035);
+  background-color: #FFFFFF;
+  border: 1px solid #DCE8E0;
+  box-shadow: 0 2px 10px -4px rgba(15, 61, 46, 0.05);
+}
+
+.card-sage {
+  background-color: #F2F7F3;
+  border: 1px solid #DCE8E0;
 }
 
 .card-interactive {
@@ -66,20 +75,22 @@
 }
 
 .card-interactive:hover {
-  border-color: #9ecbb5;
-  box-shadow: 0 6px 18px -6px rgba(11, 38, 28, 0.08);
+  border-color: #B7D4C3;
+  box-shadow: 0 10px 26px -10px rgba(15, 61, 46, 0.12);
+  transform: translateY(-2px);
 }
 
 .btn-press {
   transition: background-color 150ms cubic-bezier(0.16, 1, 0.3, 1),
     border-color 150ms cubic-bezier(0.16, 1, 0.3, 1),
     color 150ms cubic-bezier(0.16, 1, 0.3, 1),
-    transform 120ms cubic-bezier(0.16, 1, 0.3, 1),
+    transform 130ms cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 150ms ease,
     opacity 150ms ease;
 }
 
 .btn-press:active:not(:disabled) {
-  transform: scale(0.985);
+  transform: scale(0.98);
 }
 
 @keyframes viewFadeIn {
@@ -113,10 +124,21 @@
   }
 }
 
-@keyframes drawerSlideIn {
+@keyframes drawerSlideLeft {
   from {
     opacity: 0;
-    transform: translateX(-16px);
+    transform: translateX(-18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes drawerSlideRight {
+  from {
+    opacity: 0;
+    transform: translateX(28px);
   }
   to {
     opacity: 1;
@@ -127,7 +149,7 @@
 @keyframes toastSlideIn {
   from {
     opacity: 0;
-    transform: translateY(-6px);
+    transform: translateY(6px);
   }
   to {
     opacity: 1;
@@ -135,19 +157,8 @@
   }
 }
 
-@keyframes chartBarRise {
-  from {
-    opacity: 0.4;
-    transform: scaleY(0.82);
-  }
-  to {
-    opacity: 1;
-    transform: scaleY(1);
-  }
-}
-
 .animate-view-enter {
-  animation: viewFadeIn 180ms cubic-bezier(0.16, 1, 0.3, 1);
+  animation: viewFadeIn 210ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .animate-modal-overlay {
@@ -155,21 +166,19 @@
 }
 
 .animate-modal-panel {
-  animation: modalPanelIn 200ms cubic-bezier(0.16, 1, 0.3, 1);
+  animation: modalPanelIn 210ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .animate-drawer-enter {
-  animation: drawerSlideIn 200ms cubic-bezier(0.16, 1, 0.3, 1);
+  animation: drawerSlideLeft 210ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.animate-drawer-right {
+  animation: drawerSlideRight 240ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .animate-toast-enter {
   animation: toastSlideIn 180ms cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.animate-chart-rise {
-  transform-box: fill-box;
-  transform-origin: bottom;
-  animation: chartBarRise 280ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -180,5 +189,8 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+  .card-interactive:hover {
+    transform: none !important;
   }
 }

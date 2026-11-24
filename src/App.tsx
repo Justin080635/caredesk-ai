@@ -4,17 +4,13 @@ import {
   AlertTriangle,
   Bell,
   Bot,
-  Building2,
   Calendar,
   CheckCircle2,
-  ChevronRight,
   ClipboardList,
   Clock,
   FileBarChart,
   LogOut,
-  Menu,
-  PanelLeftClose,
-  PanelLeftOpen,
+  MoreHorizontal,
   Search,
   Settings,
   ShieldCheck,
@@ -45,10 +41,13 @@ import {
   subscribeToAuthState,
 } from './client/firebase';
 import { AdminProfilePage } from './components/AdminProfilePage';
-import { AppointmentsView } from './components/AppointmentsView';
+import {
+  AppointmentsView,
+  type AppointmentsRailAction,
+} from './components/AppointmentsView';
 import { AssistantView } from './components/AssistantView';
 import { AuthView } from './components/AuthView';
-import { EditorialAvatar } from './components/ClinicIllustrations';
+import { CareDeskLogoMark, EditorialAvatar } from './components/ClinicIllustrations';
 import { DashboardView, type DashboardFilteredTarget } from './components/DashboardView';
 import { DoctorWorkspace } from './components/DoctorWorkspace';
 import { FollowUpsView } from './components/FollowUpsView';
@@ -57,6 +56,7 @@ import { PatientProfilePage } from './components/PatientProfilePage';
 import { PatientsView } from './components/PatientsView';
 import { PatientWorkspace } from './components/PatientWorkspace';
 import { ReportsApiView } from './components/ReportsApiView';
+import { RightRail } from './components/RightRail';
 import { SettingsView } from './components/SettingsView';
 import { StaffProfilePage } from './components/StaffProfilePage';
 import { StaffView } from './components/StaffView';
@@ -69,19 +69,18 @@ import type {
   Patient,
   StaffMember,
 } from './shared/types';
+import { formatGreetingName, formatReadableHeaderDate } from './utils/workspaceMath';
 
 type NavTab =
   | 'dashboard'
-  | 'assistant'
   | 'patients'
   | 'appointments'
   | 'followups'
-  | 'staff'
   | 'reports'
+  | 'assistant'
   | 'settings'
+  | 'staff'
   | 'profile';
-
-type NavGroup = 'Operations' | 'Clinic Management' | 'Intelligence';
 
 interface RouteState {
   tab: NavTab;
@@ -103,6 +102,18 @@ const VALID_TABS: ReadonlySet<NavTab> = new Set([
 
 const CLINIC_STORAGE_KEY = 'caredesk.activeClinicId';
 
+function getLocalTodayIso(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function getTimeGreeting(): string {
+  const hr = new Date().getHours();
+  if (hr < 12) return 'Good morning';
+  if (hr < 17) return 'Good afternoon';
+  return 'Good evening';
+}
+
 function readStoredClinicId(): string | null {
   try {
     return typeof window !== 'undefined' ? window.sessionStorage.getItem(CLINIC_STORAGE_KEY) : null;
@@ -120,7 +131,7 @@ function writeStoredClinicId(clinicId: string | null): void {
       window.sessionStorage.removeItem(CLINIC_STORAGE_KEY);
     }
   } catch {
-    // Ignore storage access errors in restricted contexts
+    // Ignore storage access errors
   }
 }
 
@@ -158,9 +169,8 @@ function getPathForRoute(route: RouteState): string {
   return `/${route.tab}`;
 }
 
-const NAV_ITEMS: Array<{
+const SIDEBAR_MAIN_ITEMS: Array<{
   id: NavTab;
-  group: NavGroup;
   label: string;
   title: string;
   subtitle: string;
@@ -168,79 +178,68 @@ const NAV_ITEMS: Array<{
 }> = [
   {
     id: 'dashboard',
-    group: 'Operations',
     label: 'Dashboard',
-    title: 'Operations Dashboard',
-    subtitle: 'Live clinic KPIs, analytics, and calendar scheduling',
+    title: 'Dashboard',
+    subtitle: 'Live clinic operations, schedules, and volume overview',
     icon: Activity,
   },
   {
     id: 'patients',
-    group: 'Clinic Management',
     label: 'Patients',
-    title: 'Patient Management',
-    subtitle: 'Clinic-isolated patient directory, sorting, and profiles',
+    title: 'Patients',
+    subtitle: 'Clinic-isolated patient roster, intake, and profile drawer',
     icon: Users,
   },
   {
     id: 'appointments',
-    group: 'Clinic Management',
     label: 'Appointments',
-    title: 'Appointment Management',
-    subtitle: 'Conflict-checked bookings, paginated schedule & monthly calendar',
+    title: 'Appointments',
+    subtitle: 'Color-coded calendar bookings and conflict-checked slots',
     icon: Calendar,
   },
   {
     id: 'followups',
-    group: 'Clinic Management',
     label: 'Follow-ups',
-    title: 'Administrative Follow-ups',
-    subtitle: 'Pending, overdue, and completed administrative queues',
+    title: 'Follow-ups',
+    subtitle: 'Priority-grouped outreach tasks and overdue tracking',
     icon: ClipboardList,
   },
   {
-    id: 'staff',
-    group: 'Clinic Management',
-    label: 'Staff',
-    title: 'Clinic Staff Roster',
-    subtitle: 'Clinicians, coordinators, administrators, and assigned schedules',
-    icon: Stethoscope,
-  },
-  {
     id: 'reports',
-    group: 'Intelligence',
     label: 'Reports',
-    title: 'Operational Reports & API',
-    subtitle: 'Live SQLite metrics, exports, and OpenAPI reference',
+    title: 'Operational Reports',
+    subtitle: 'Clinic capacity analytics, exports, and OpenAPI docs',
     icon: FileBarChart,
   },
   {
     id: 'assistant',
-    group: 'Intelligence',
     label: 'AI Assistant',
-    title: 'CareDesk Assistant',
-    subtitle: 'Conversational clinic copilot via Local REST Preview',
+    title: 'AI Assistant',
+    subtitle: 'Conversational clinic copilot with tool tracing & approval gate',
     icon: Bot,
-  },
-  {
-    id: 'profile',
-    group: 'Intelligence',
-    label: 'My Profile',
-    title: 'Administrator Profile & Team',
-    subtitle: 'Personal account, clinic workspace, security, and RBAC roles',
-    icon: UserCircle,
-  },
-  {
-    id: 'settings',
-    group: 'Intelligence',
-    label: 'Settings',
-    title: 'Clinic Settings',
-    subtitle: 'Display preferences, access control, and MCP status',
-    icon: Settings,
   },
 ];
 
-const NAV_GROUPS: NavGroup[] = ['Operations', 'Clinic Management', 'Intelligence'];
+const EXTRA_PAGE_META: Record<
+  'settings' | 'staff' | 'profile',
+  { label: string; title: string; subtitle: string }
+> = {
+  settings: {
+    label: 'Settings',
+    title: 'Clinic Settings',
+    subtitle: 'Display preferences, navigation layout, and Synapse MCP readiness',
+  },
+  staff: {
+    label: 'Staff',
+    title: 'Clinic Staff Roster',
+    subtitle: 'Clinicians, coordinators, and duty schedules',
+  },
+  profile: {
+    label: 'My Profile',
+    title: 'Administrator Profile & Team',
+    subtitle: 'Personal account, clinic workspace, security, and RBAC roles',
+  },
+};
 
 interface ToastItem {
   id: string;
@@ -267,8 +266,9 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<NavTab>(initialRoute.tab);
   const [routePatientId, setRoutePatientId] = useState<string | null>(initialRoute.patientId);
   const [routeStaffId, setRouteStaffId] = useState<string | null>(initialRoute.staffId);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
+  // Default to floating icon-only pill sidebar per redesign specification
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [refreshSignal, setRefreshSignal] = useState(0);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [compactDensity, setCompactDensity] = useState(false);
@@ -276,13 +276,21 @@ export default function App() {
   const [pendingAssistantPrompt, setPendingAssistantPrompt] = useState<string | null>(null);
   const [staffDirectory, setStaffDirectory] = useState<StaffMember[]>([]);
 
-  // Trigger creation modals & cross-view deep links / filters
+  // Right Rail shared synchronization state (for Dashboard & Appointments)
+  const [focusDate, setFocusDate] = useState<string>(getLocalTodayIso);
+  const [rightRailOverview, setRightRailOverview] = useState<OverviewReport | null>(null);
+  const [rightRailDayAppointments, setRightRailDayAppointments] = useState<Appointment[]>([]);
+  const [railSelectedAppointment, setRailSelectedAppointment] = useState<Appointment | null>(null);
+  const [appointmentsRailAction, setAppointmentsRailAction] =
+    useState<AppointmentsRailAction | null>(null);
+
+  // Modals & Cross-view deep links
   const [patientCreateSignal, setPatientCreateSignal] = useState(0);
   const [appointmentCreateSignal, setAppointmentCreateSignal] = useState(0);
   const [followupCreateSignal, setFollowupCreateSignal] = useState(0);
-  const [prefillAppointmentPatientId, setPrefillAppointmentPatientId] = useState<
-    string | null
-  >(null);
+  const [prefillAppointmentPatientId, setPrefillAppointmentPatientId] = useState<string | null>(
+    null
+  );
   const [patientsStatusFilter, setPatientsStatusFilter] = useState<string>('All');
   const [appointmentsStatusFilter, setAppointmentsStatusFilter] = useState<string>('All');
   const [appointmentsDateFilter, setAppointmentsDateFilter] = useState<string>('');
@@ -358,7 +366,6 @@ export default function App() {
           requestedClinicId: storedClinicId || undefined,
         });
       } catch {
-        // Retry once without stale stored clinic ID if membership changed
         if (storedClinicId) {
           setActiveClinicId(null);
           writeStoredClinicId(null);
@@ -428,6 +435,9 @@ export default function App() {
       setActiveTab(route.tab);
       setRoutePatientId(route.patientId);
       setRouteStaffId(route.staffId);
+      if (route.tab !== 'appointments') {
+        setRailSelectedAppointment(null);
+      }
       const targetPath = getPathForRoute(route);
       if (typeof window !== 'undefined' && window.location.pathname !== targetPath) {
         window.history.pushState(route, '', targetPath);
@@ -457,7 +467,6 @@ export default function App() {
   const activeClinicId = accountSession?.activeClinic?.id ?? null;
   const activeRole = accountSession?.activeMembership?.role ?? null;
 
-  // Load notification summary & staff directory lookup for Admin/Staff workspaces only
   useEffect(() => {
     if (
       !firebaseUser ||
@@ -479,13 +488,14 @@ export default function App() {
         ]);
         if (!cancelled) {
           setOverviewSnapshot(ov);
+          setRightRailOverview(ov);
           setDailySnapshot(dy);
           setStaffDirectory(staff);
           setNotificationsList(notifData.items);
           setUnreadNotificationsCount(notifData.unreadCount);
         }
       } catch {
-        // Non-blocking background alert refresh
+        // Non-blocking alert refresh
       }
     }
     loadOperationalAlerts();
@@ -494,7 +504,6 @@ export default function App() {
     };
   }, [firebaseUser, activeClinicId, activeRole, accountSession?.needsOnboarding, refreshSignal]);
 
-  // Debounced Global Search across clinic-isolated patients, appointments & staff
   useEffect(() => {
     const q = globalSearch.trim();
     if (!q || !activeClinicId) {
@@ -534,7 +543,6 @@ export default function App() {
     };
   }, [globalSearch, activeClinicId]);
 
-  // Close popovers on outside click
   useEffect(() => {
     const onPointerDown = (e: MouseEvent) => {
       if (
@@ -642,7 +650,7 @@ export default function App() {
           return;
         }
       } catch {
-        // Fall through to roster directory
+        // Fall through
       }
       navigateToTab('staff');
     },
@@ -664,6 +672,9 @@ export default function App() {
       } else if (target.tab === 'appointments') {
         setAppointmentsStatusFilter(target.status ?? 'All');
         setAppointmentsDateFilter(target.date ?? '');
+        if (target.date) {
+          setFocusDate(target.date);
+        }
         setSelectedAppointmentIdForDetail(target.appointmentId ?? null);
       } else if (target.tab === 'followups') {
         setFollowupsViewMode(target.followUpView ?? 'pending');
@@ -731,24 +742,10 @@ export default function App() {
     unreadNotificationsCount +
     pendingVerificationsCount;
 
-  // Loading Splash during Firebase & Session Verification
   if (authBooting) {
     return (
-      <div className="min-h-screen bg-[#0B261C] text-emerald-50 flex flex-col items-center justify-center p-6">
-        <div className="w-12 h-12 rounded-2xl bg-[#059669] text-white flex items-center justify-center shadow-sm mb-4">
-          <svg
-            viewBox="0 0 24 24"
-            className="w-6 h-6"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2.3"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M12 5v14M5 12h14" />
-          </svg>
-        </div>
+      <div className="min-h-screen bg-[#0F3D2E] text-emerald-50 flex flex-col items-center justify-center p-6">
+        <CareDeskLogoMark className="w-12 h-12 mb-4 shadow-sm" />
         <div className="text-base font-bold text-white tracking-tight">CareDesk AI</div>
         <p className="text-xs text-emerald-200/75 mt-1">
           Verifying clinic credentials and workspace boundary...
@@ -757,21 +754,20 @@ export default function App() {
     );
   }
 
-  // Sync error recovery view if Firebase user exists but backend sync failed
   if (firebaseUser && authSyncError && !accountSession) {
     return (
-      <div className="min-h-screen bg-[#F6F8F6] text-[#111C17] flex items-center justify-center p-6">
-        <div className="w-full max-w-md bg-white border border-[#E3E8E4] rounded-2xl p-6 space-y-4">
-          <div className="flex items-center gap-2.5 text-red-700 font-semibold text-sm">
+      <div className="min-h-screen bg-[#EEF3EF] text-[#1C2B25] flex items-center justify-center p-6">
+        <div className="w-full max-w-md bg-white border border-[#DCE8E0] rounded-[24px] p-6 space-y-4 shadow-sm">
+          <div className="flex items-center gap-2.5 text-rose-700 font-semibold text-sm">
             <AlertTriangle className="w-5 h-5 shrink-0" aria-hidden="true" />
             <span>Unable to Load Clinic Session</span>
           </div>
-          <p className="text-xs text-[#526259] leading-relaxed">{authSyncError}</p>
+          <p className="text-xs text-[#6B7B73] leading-relaxed">{authSyncError}</p>
           <div className="flex items-center justify-end gap-2.5">
             <button
               type="button"
               onClick={handleSignOut}
-              className="px-3.5 py-2 text-xs font-medium text-[#526259] border border-[#E3E8E4] rounded-lg"
+              className="px-4 py-2 text-xs font-semibold text-[#6B7B73] border border-[#DCE8E0] rounded-full"
             >
               Sign Out
             </button>
@@ -787,7 +783,7 @@ export default function App() {
                   setAuthBooting(false);
                 }
               }}
-              className="px-4 py-2 text-xs font-semibold text-white bg-[#059669] hover:bg-[#047857] rounded-lg"
+              className="px-5 py-2 text-xs font-semibold text-white bg-[#34C38F] hover:bg-[#24B07D] rounded-full"
             >
               Retry Connection
             </button>
@@ -797,7 +793,6 @@ export default function App() {
     );
   }
 
-  // Unauthenticated Entry Gate
   if (!firebaseUser || !accountSession) {
     return (
       <AuthView
@@ -811,7 +806,7 @@ export default function App() {
   const renderFixedToasts = () =>
     toasts.length > 0 ? (
       <div
-        className="fixed bottom-4 right-4 z-50 w-full max-w-sm space-y-2 px-4 sm:px-0"
+        className="fixed bottom-20 lg:bottom-6 right-4 lg:right-6 z-50 w-full max-w-sm space-y-2 px-4 sm:px-0"
         aria-live="polite"
         aria-atomic="true"
       >
@@ -819,17 +814,17 @@ export default function App() {
           <div
             key={toast.id}
             role={toast.kind === 'error' ? 'alert' : 'status'}
-            className={`animate-toast-enter px-4 py-3 rounded-xl border shadow-md flex items-center justify-between gap-4 text-xs ${
+            className={`animate-toast-enter px-4 py-3 rounded-2xl border shadow-md flex items-center justify-between gap-4 text-xs ${
               toast.kind === 'error'
-                ? 'bg-red-50 border-red-200 text-red-800'
-                : 'bg-[#ECF4EF] border-[#B7DFCA] text-[#0B261C]'
+                ? 'bg-rose-50 border-rose-200 text-rose-800'
+                : 'bg-[#E3F7EF] border-[#B5E5D0] text-[#0F3D2E]'
             }`}
           >
-            <div className="flex items-center gap-2 font-medium">
+            <div className="flex items-center gap-2 font-semibold">
               {toast.kind === 'error' ? (
-                <AlertTriangle className="w-4 h-4 text-red-700 shrink-0" aria-hidden="true" />
+                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" aria-hidden="true" />
               ) : (
-                <CheckCircle2 className="w-4 h-4 text-[#047857] shrink-0" aria-hidden="true" />
+                <CheckCircle2 className="w-4 h-4 text-[#137A55] shrink-0" aria-hidden="true" />
               )}
               <span>{toast.message}</span>
             </div>
@@ -846,7 +841,6 @@ export default function App() {
       </div>
     ) : null;
 
-  // Clinic Workspace / Doctor Verification / Patient Link Onboarding Gate
   if (accountSession.needsOnboarding || !accountSession.activeClinic) {
     return (
       <>
@@ -873,7 +867,6 @@ export default function App() {
     );
   }
 
-  // Dedicated Doctor Workspace
   if (accountSession.activeMembership?.role === 'Doctor') {
     return (
       <>
@@ -890,7 +883,6 @@ export default function App() {
     );
   }
 
-  // Strictly Isolated Patient Portal Workspace
   if (accountSession.activeMembership?.role === 'Patient') {
     return (
       <>
@@ -908,49 +900,33 @@ export default function App() {
   }
 
   const { user, activeClinic, activeMembership, clinics, permissions } = accountSession;
-  const activeNavItem = NAV_ITEMS.find((n) => n.id === activeTab) ?? NAV_ITEMS[0];
-  const headerTitle =
-    activeTab === 'patients' && routePatientId
-      ? `Patient Profile · ${routePatientId}`
-      : activeTab === 'staff' && routeStaffId
-        ? `Staff Profile · ${routeStaffId}`
-        : activeNavItem.title;
+  const activeSidebarItem = SIDEBAR_MAIN_ITEMS.find((n) => n.id === activeTab);
+  const showRightRail = activeTab === 'dashboard' || activeTab === 'appointments';
+  const todayDateIso = overviewSnapshot?.todayDate ?? getLocalTodayIso();
+  const formattedHeaderDate = formatReadableHeaderDate(todayDateIso);
+  const firstName = formatGreetingName(user.fullName);
 
-  const topCtaLabel =
-    activeTab === 'dashboard' && permissions.canManageAppointments
-      ? 'Schedule Appointment'
-      : activeTab === 'reports'
-        ? 'Open Assistant'
-        : null;
+  const headerHeading =
+    activeTab === 'dashboard'
+      ? `${getTimeGreeting()}, ${firstName}`
+      : activeTab === 'patients' && routePatientId
+        ? `Patient Chart · ${routePatientId}`
+        : activeTab === 'staff' && routeStaffId
+          ? `Staff Profile · ${routeStaffId}`
+          : activeSidebarItem
+            ? activeSidebarItem.title
+            : EXTRA_PAGE_META[activeTab as 'settings' | 'staff' | 'profile'].title;
 
-  const handleTopPrimaryAction = () => {
-    if (activeTab === 'dashboard') {
-      handleQuickScheduleAppointment();
-    } else if (activeTab === 'reports') {
-      navigateToTab('assistant');
-    }
-  };
+  const headerSubtitle =
+    activeTab === 'dashboard'
+      ? `${activeClinic.name} · ${formattedHeaderDate}`
+      : activeSidebarItem
+        ? `${activeSidebarItem.subtitle} · ${formattedHeaderDate}`
+        : `${EXTRA_PAGE_META[activeTab as 'settings' | 'staff' | 'profile'].subtitle} · ${formattedHeaderDate}`;
 
   const patientUiRole = permissions.canManagePatients ? 'administrator' : 'viewer';
   const appointmentUiRole = permissions.canManageAppointments ? 'administrator' : 'viewer';
   const staffUiRole = permissions.canManageStaff ? 'administrator' : 'viewer';
-
-  const renderBrandMark = () => (
-    <div className="w-8 h-8 rounded-lg bg-[#059669] text-white flex items-center justify-center shrink-0 shadow-xs">
-      <svg
-        viewBox="0 0 24 24"
-        className="w-4 h-4"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2.3"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        aria-hidden="true"
-      >
-        <path d="M12 5v14M5 12h14" />
-      </svg>
-    </div>
-  );
 
   const renderUserAvatar = (sizeClass: string, smallFallback = true) =>
     user.avatarUrl && !avatarLoadError ? (
@@ -959,7 +935,7 @@ export default function App() {
         alt={user.fullName}
         referrerPolicy="no-referrer"
         onError={() => setAvatarLoadError(true)}
-        className={`${sizeClass} rounded-lg object-cover shrink-0 border border-white/15`}
+        className={`${sizeClass} rounded-full object-cover shrink-0 border border-[#DCE8E0]`}
       />
     ) : (
       <EditorialAvatar
@@ -969,808 +945,862 @@ export default function App() {
       />
     );
 
-  const renderSidebarNav = (isMobile: boolean, collapsed = false) => (
-    <nav
-      className="flex-1 px-3 py-4 space-y-5 overflow-y-auto overflow-x-hidden"
-      aria-label={isMobile ? 'Mobile Navigation' : 'Primary Navigation'}
-    >
-      {NAV_GROUPS.map((group) => {
-        const items = NAV_ITEMS.filter((item) => item.group === group);
-        return (
-          <div key={group} className="space-y-1">
-            {!collapsed && (
-              <div className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-emerald-200/50 whitespace-nowrap">
-                {group}
+  return (
+    <div className="min-h-screen bg-[#EEF3EF] text-[#1C2B25] p-2.5 sm:p-4 lg:p-6 pb-20 lg:pb-6">
+      {/* Main Floating Rounded Application Container */}
+      <div className="shell-frame max-w-[1620px] mx-auto min-h-[calc(100vh-3rem)] p-3 sm:p-4 lg:p-5 flex gap-4 lg:gap-5 relative">
+        {/* 1. Floating Inset Forest-Green Pill Sidebar (Desktop) */}
+        <aside
+          aria-label="Primary Clinic Navigation"
+          className={`hidden lg:flex lg:flex-col lg:justify-between shrink-0 rounded-[32px] bg-[#0F3D2E] text-emerald-50 py-5 px-3 sticky top-5 h-[calc(100vh-5.5rem)] max-h-[880px] shadow-md transition-[width] duration-200 ${
+            sidebarCollapsed ? 'w-[74px] items-center' : 'w-[208px] items-stretch'
+          }`}
+        >
+          {/* Top Brand Mark */}
+          <div
+            className={`flex items-center ${
+              sidebarCollapsed ? 'justify-center' : 'gap-3 px-2'
+            }`}
+          >
+            <button
+              type="button"
+              onClick={() => navigateToTab('dashboard')}
+              title="CareDesk AI · Dashboard"
+              aria-label="CareDesk AI Home"
+              className="btn-press focus:outline-none rounded-2xl"
+            >
+              <CareDeskLogoMark className="w-10 h-10 shadow-sm" />
+            </button>
+            {!sidebarCollapsed && (
+              <div className="min-w-0">
+                <div className="text-sm font-bold text-white tracking-tight truncate">
+                  CareDesk AI
+                </div>
+                <div className="text-[10px] text-emerald-200/75 truncate">{activeClinic.name}</div>
               </div>
             )}
-            {items.map((item) => {
+          </div>
+
+          {/* Center Main Icons */}
+          <nav
+            aria-label="Primary Sections"
+            className={`flex-1 flex flex-col justify-center gap-2 my-4 ${
+              sidebarCollapsed ? 'items-center' : 'items-stretch'
+            }`}
+          >
+            {SIDEBAR_MAIN_ITEMS.map((item) => {
               const Icon = item.icon;
               const isActive = activeTab === item.id;
               return (
                 <button
                   key={item.id}
                   type="button"
-                  onClick={() => {
-                    navigateToTab(item.id);
-                    if (isMobile) setMobileMenuOpen(false);
-                  }}
-                  title={collapsed ? item.label : undefined}
+                  onClick={() => navigateToTab(item.id)}
                   aria-label={item.label}
                   aria-current={isActive ? 'page' : undefined}
-                  className={`btn-press relative w-full flex items-center ${
-                    collapsed ? 'justify-center px-2 py-2.5' : 'gap-3 px-3 py-2.5'
-                  } rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
+                  title={sidebarCollapsed ? item.label : undefined}
+                  className={`group relative btn-press flex items-center ${
+                    sidebarCollapsed
+                      ? 'w-11 h-11 justify-center'
+                      : 'w-full gap-3 px-3.5 py-2.5'
+                  } rounded-2xl transition-all ${
                     isActive
-                      ? 'bg-[#059669] text-white shadow-xs'
-                      : 'text-emerald-100/80 hover:bg-[#12382A] hover:text-white'
+                      ? 'bg-[#34C38F] text-white shadow-sm'
+                      : 'text-emerald-100/80 hover:bg-white/12 hover:text-white hover:-translate-y-0.5'
                   }`}
                 >
-                  {isActive && !collapsed && (
-                    <span
-                      className="absolute left-1 top-2 bottom-2 w-0.5 rounded-full bg-emerald-200"
-                      aria-hidden="true"
-                    />
+                  <Icon className="w-[19px] h-[19px] shrink-0" aria-hidden="true" />
+                  {!sidebarCollapsed && (
+                    <span className="text-xs font-semibold truncate">{item.label}</span>
                   )}
-                  <Icon className="w-4 h-4 shrink-0" aria-hidden="true" />
-                  {!collapsed && <span>{item.label}</span>}
+                  {sidebarCollapsed && (
+                    <span className="pointer-events-none opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity absolute left-full ml-3 px-2.5 py-1 rounded-full bg-[#1C2B25] text-white text-[11px] font-semibold whitespace-nowrap shadow-md z-50">
+                      {item.label}
+                    </span>
+                  )}
                 </button>
               );
             })}
-          </div>
-        );
-      })}
-    </nav>
-  );
+          </nav>
 
-  return (
-    <div className="min-h-screen flex bg-[#F6F8F6] text-[#111C17]">
-      {/* Desktop Deep Forest-Green Collapsible Sidebar */}
-      <aside
-        className={`hidden lg:flex lg:flex-col lg:sticky lg:top-0 lg:h-screen shrink-0 overflow-hidden bg-[#0B261C] text-emerald-50 border-r border-[#174333] transition-[width] duration-200 ease-out ${
-          sidebarCollapsed ? 'w-[76px]' : 'w-60'
-        }`}
-      >
-        <div
-          className={`px-4 py-4 border-b border-[#174333] flex items-center ${
-            sidebarCollapsed ? 'justify-center flex-col gap-2' : 'justify-between gap-2'
-          }`}
-        >
-          <div className="flex items-center gap-3 min-w-0">
-            {renderBrandMark()}
-            {!sidebarCollapsed && (
-              <div className="min-w-0">
-                <div className="text-base font-bold tracking-tight text-white truncate">
-                  CareDesk AI
-                </div>
-                <p className="text-[11px] text-emerald-200/75 truncate" title={activeClinic.name}>
-                  {activeClinic.name}
-                </p>
-              </div>
-            )}
-          </div>
-          <button
-            type="button"
-            onClick={() => setSidebarCollapsed((c) => !c)}
-            className="btn-press p-1.5 text-emerald-200/75 hover:text-white hover:bg-[#12382A] rounded-md transition-colors shrink-0"
-            aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            aria-expanded={!sidebarCollapsed}
-            title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          >
-            {sidebarCollapsed ? (
-              <PanelLeftOpen className="w-4 h-4" aria-hidden="true" />
-            ) : (
-              <PanelLeftClose className="w-4 h-4" aria-hidden="true" />
-            )}
-          </button>
-        </div>
-
-        {/* Multi-clinic switcher when user belongs to multiple authorized clinics */}
-        {!sidebarCollapsed && clinics.length > 1 && (
-          <div className="px-3 pt-3">
-            <label htmlFor="clinic-switcher" className="sr-only">
-              Switch clinic workspace
-            </label>
-            <select
-              id="clinic-switcher"
-              value={activeClinic.id}
-              onChange={(e) => handleSwitchClinic(e.target.value)}
-              className="w-full px-2.5 py-1.5 text-xs font-medium bg-[#071D15] text-emerald-100 border border-[#174333] rounded-lg focus:outline-none focus:border-emerald-400"
-            >
-              {clinics.map((c) => (
-                <option key={c.clinic.id} value={c.clinic.id}>
-                  {c.clinic.name} ({c.membership.role})
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        {renderSidebarNav(false, sidebarCollapsed)}
-
-        {/* Sidebar Authenticated User Profile & Sign Out */}
-        <div className="p-3.5 border-t border-[#174333] space-y-2.5">
-          <button
-            type="button"
-            onClick={() => navigateToTab('profile')}
-            title={
-              sidebarCollapsed
-                ? `${user.fullName} (${activeMembership?.role ?? 'Clinic Administrator'})`
-                : undefined
-            }
-            className={`btn-press w-full flex items-center ${
-              sidebarCollapsed ? 'justify-center p-2' : 'gap-3 p-2.5'
-            } rounded-lg bg-[#071D15] hover:bg-[#12382A] transition-colors text-left`}
-          >
-            {renderUserAvatar('w-8 h-8')}
-            {!sidebarCollapsed && (
-              <div className="min-w-0 flex-1">
-                <div className="text-xs font-medium text-white truncate">{user.fullName}</div>
-                <div className="text-[11px] font-mono text-emerald-300 truncate">
-                  {activeMembership?.role ?? 'Clinic Administrator'}
-                </div>
-              </div>
-            )}
-          </button>
-
-          {!sidebarCollapsed ? (
-            <button
-              type="button"
-              onClick={handleSignOut}
-              className="btn-press w-full flex items-center justify-center gap-2 px-3 py-1.5 text-xs font-medium text-emerald-100/85 hover:text-white bg-[#071D15] hover:bg-[#12382A] border border-[#174333] rounded-lg transition-colors"
-            >
-              <LogOut className="w-3.5 h-3.5" aria-hidden="true" />
-              Sign Out
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={handleSignOut}
-              title="Sign Out"
-              aria-label="Sign Out"
-              className="btn-press w-full py-1.5 flex items-center justify-center text-emerald-200 bg-[#071D15] hover:bg-[#12382A] rounded-md"
-            >
-              <LogOut className="w-3.5 h-3.5" aria-hidden="true" />
-            </button>
-          )}
-        </div>
-      </aside>
-
-      {/* Mobile Navigation Drawer */}
-      {mobileMenuOpen && (
-        <div className="fixed inset-0 z-50 lg:hidden flex">
+          {/* Bottom Pinned: Settings & Logout */}
           <div
-            className="fixed inset-0 bg-black/50 animate-modal-overlay"
-            onClick={() => setMobileMenuOpen(false)}
-            aria-hidden="true"
-          />
-          <aside className="relative w-64 max-w-[82vw] bg-[#0B261C] text-emerald-50 flex flex-col z-10 animate-drawer-enter">
-            <div className="px-5 py-4 border-b border-[#174333] flex items-center justify-between">
-              <div className="flex items-center gap-2.5 min-w-0">
-                {renderBrandMark()}
-                <div className="min-w-0">
-                  <div className="text-base font-bold text-white truncate">CareDesk AI</div>
-                  <div className="text-[11px] text-emerald-200/75 truncate">{activeClinic.name}</div>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setMobileMenuOpen(false)}
-                className="p-1.5 text-emerald-200 hover:text-white"
-                aria-label="Close navigation menu"
-              >
-                <X className="w-5 h-5" aria-hidden="true" />
-              </button>
-            </div>
-            {renderSidebarNav(true, false)}
-            <div className="p-4 border-t border-[#174333] space-y-2.5">
-              <button
-                type="button"
-                onClick={() => {
-                  navigateToTab('profile');
-                  setMobileMenuOpen(false);
-                }}
-                className="w-full flex items-center gap-2.5 text-left"
-              >
-                {renderUserAvatar('w-7 h-7')}
-                <div className="min-w-0">
-                  <div className="text-xs font-medium text-white truncate">{user.fullName}</div>
-                  <div className="text-[11px] font-mono text-emerald-300 truncate">
-                    {activeMembership?.role}
-                  </div>
-                </div>
-              </button>
-              <button
-                type="button"
-                onClick={handleSignOut}
-                className="w-full flex items-center justify-center gap-2 px-3 py-1.5 text-xs font-medium text-emerald-100 bg-[#071D15] border border-[#174333] rounded-lg"
-              >
-                <LogOut className="w-3.5 h-3.5" aria-hidden="true" />
-                Sign Out
-              </button>
-            </div>
-          </aside>
-        </div>
-      )}
-
-      {/* Main Workspace Column */}
-      <div className="flex-1 flex flex-col min-w-0">
-        {/* Top Navigation Bar */}
-        <header className="h-16 bg-white border-b border-[#E3E8E4] px-4 sm:px-6 flex items-center justify-between gap-3 shrink-0">
-          <div className="flex items-center gap-3 min-w-0">
-            <button
-              type="button"
-              onClick={() => setMobileMenuOpen(true)}
-              className="lg:hidden p-2 text-[#526259] hover:text-[#111C17] rounded-lg"
-              aria-label="Open navigation menu"
-            >
-              <Menu className="w-5 h-5" aria-hidden="true" />
-            </button>
-            <div className="min-w-0">
-              <div className="hidden sm:flex items-center gap-1.5 text-[11px] text-[#526259] whitespace-nowrap truncate">
-                <span className="inline-flex items-center gap-1 font-medium text-[#111C17]">
-                  <Building2 className="w-3 h-3 text-[#047857]" aria-hidden="true" />
-                  {activeClinic.name}
-                </span>
-                <ChevronRight className="w-3 h-3 text-[#8E9B94] shrink-0" aria-hidden="true" />
-                <button
-                  type="button"
-                  onClick={() => navigateToTab(activeTab)}
-                  className="font-medium text-[#047857] hover:underline"
-                >
-                  {activeNavItem.label}
-                </button>
-                {activeTab === 'patients' && routePatientId && (
-                  <>
-                    <ChevronRight className="w-3 h-3 text-[#8E9B94] shrink-0" aria-hidden="true" />
-                    <span className="font-mono text-[#111C17]">{routePatientId}</span>
-                  </>
-                )}
-                {activeTab === 'staff' && routeStaffId && (
-                  <>
-                    <ChevronRight className="w-3 h-3 text-[#8E9B94] shrink-0" aria-hidden="true" />
-                    <span className="font-mono text-[#111C17]">{routeStaffId}</span>
-                  </>
-                )}
-                {overviewSnapshot?.todayDate && (
-                  <>
-                    <span className="hidden lg:inline" aria-hidden="true">
-                      ·
-                    </span>
-                    <span className="hidden lg:inline font-mono tabular-nums">
-                      {overviewSnapshot.todayDate}
-                    </span>
-                  </>
-                )}
-              </div>
-              <h1 className="text-base sm:text-lg font-semibold text-[#111C17] truncate leading-tight">
-                {headerTitle}
-              </h1>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
-            {/* Global Search */}
-            <div ref={searchContainerRef} className="relative hidden md:block w-44 lg:w-64 xl:w-72">
-              <Search
-                className="w-3.5 h-3.5 text-[#526259] absolute left-3 top-1/2 -translate-y-1/2"
-                aria-hidden="true"
-              />
-              <input
-                id="global-search"
-                type="search"
-                value={globalSearch}
-                onFocus={() => setSearchOpen(true)}
-                onChange={(e) => {
-                  setGlobalSearch(e.target.value);
-                  setSearchOpen(true);
-                }}
-                placeholder="Search patient, staff, or ID..."
-                aria-label="Global clinic search"
-                className="w-full pl-8 pr-3 py-1.5 text-xs bg-[#F6F8F6] border border-[#E3E8E4] rounded-lg focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#059669]/25 focus:border-[#059669]"
-              />
-
-              {searchOpen && globalSearch.trim().length > 0 && (
-                <div className="absolute right-0 mt-1.5 w-80 bg-white border border-[#E3E8E4] rounded-xl shadow-lg z-40 overflow-hidden">
-                  <div className="px-3.5 py-2 border-b border-[#E3E8E4] bg-[#F6F8F6] text-[11px] font-medium text-[#526259] flex items-center justify-between">
-                    <span>Search Results ({activeClinic.id})</span>
-                    {searchLoading && <span>Searching...</span>}
-                  </div>
-                  {searchResults.patients.length === 0 &&
-                  searchResults.appointments.length === 0 &&
-                  searchResults.staff.length === 0 &&
-                  !searchLoading ? (
-                    <div className="px-4 py-5 text-xs text-[#526259] text-center">
-                      No matching patients, staff, or appointments found in this clinic.
-                    </div>
-                  ) : (
-                    <div className="max-h-72 overflow-y-auto divide-y divide-[#E3E8E4]">
-                      {searchResults.patients.map((pt) => (
-                        <button
-                          key={pt.id}
-                          type="button"
-                          onClick={() => {
-                            handleOpenPatientProfile(pt.id);
-                            setSearchOpen(false);
-                            setGlobalSearch('');
-                          }}
-                          className="w-full text-left px-3.5 py-2.5 hover:bg-[#ECF4EF]/60 transition-colors"
-                        >
-                          <div className="flex items-center justify-between text-xs">
-                            <span className="font-semibold text-[#111C17]">{pt.fullName}</span>
-                            <span className="font-mono text-[#047857]">{pt.id}</span>
-                          </div>
-                          <div className="text-[11px] text-[#526259] mt-0.5">
-                            Patient · {pt.administrativeStatus}
-                          </div>
-                        </button>
-                      ))}
-                      {searchResults.staff.map((stf) => (
-                        <button
-                          key={stf.id}
-                          type="button"
-                          onClick={() => {
-                            handleOpenStaffProfile(stf.id);
-                            setSearchOpen(false);
-                            setGlobalSearch('');
-                          }}
-                          className="w-full text-left px-3.5 py-2.5 hover:bg-[#ECF4EF]/60 transition-colors"
-                        >
-                          <div className="flex items-center justify-between text-xs">
-                            <span className="font-semibold text-[#111C17]">{stf.fullName}</span>
-                            <span className="font-mono text-[#0B261C]">{stf.id}</span>
-                          </div>
-                          <div className="text-[11px] text-[#526259] mt-0.5">
-                            Staff ({stf.role}) · {stf.department}
-                          </div>
-                        </button>
-                      ))}
-                      {searchResults.appointments.map((apt) => (
-                        <button
-                          key={apt.id}
-                          type="button"
-                          onClick={() => {
-                            handleNavigateToFiltered({
-                              tab: 'appointments',
-                              date: '',
-                              status: 'All',
-                              appointmentId: apt.id,
-                            });
-                            setSearchOpen(false);
-                            setGlobalSearch('');
-                          }}
-                          className="w-full text-left px-3.5 py-2.5 hover:bg-[#ECF4EF]/60 transition-colors"
-                        >
-                          <div className="flex items-center justify-between text-xs">
-                            <span className="font-medium text-[#111C17]">
-                              {apt.patientName ?? apt.patientId}
-                            </span>
-                            <span className="font-mono text-[#526259]">{apt.id}</span>
-                          </div>
-                          <div className="text-[11px] text-[#526259] mt-0.5 font-mono tabular-nums">
-                            {apt.appointmentDate} {apt.appointmentTime} · {apt.department}
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Notifications Popover */}
-            <div ref={notifContainerRef} className="relative">
-              <button
-                type="button"
-                onClick={() => setNotifOpen((prev) => !prev)}
-                className="relative p-2 text-[#526259] hover:text-[#111C17] hover:bg-[#F6F8F6] border border-[#E3E8E4] rounded-lg transition-colors"
-                aria-label="Operational notifications"
-                aria-expanded={notifOpen}
-              >
-                <Bell className="w-4 h-4" aria-hidden="true" />
-                {alertBadgeCount > 0 && (
-                  <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-[#059669] text-white text-[10px] font-mono font-semibold flex items-center justify-center tabular-nums">
-                    {alertBadgeCount}
-                  </span>
-                )}
-              </button>
-
-              {notifOpen && (
-                <div className="absolute right-0 mt-1.5 w-96 max-w-[92vw] bg-white border border-[#E3E8E4] rounded-xl shadow-lg z-40 overflow-hidden">
-                  <div className="px-4 py-2.5 border-b border-[#E3E8E4] bg-[#F6F8F6] flex items-center justify-between gap-2">
-                    <span className="text-xs font-semibold text-[#111C17]">
-                      Operational Notifications
-                    </span>
-                    <div className="flex items-center gap-2">
-                      {unreadNotificationsCount > 0 && (
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            await markAllNotificationsRead().catch(() => {});
-                            setNotificationsList((prev) =>
-                              prev.map((item) => ({ ...item, isRead: true }))
-                            );
-                            setUnreadNotificationsCount(0);
-                          }}
-                          className="text-[11px] font-medium text-[#047857] hover:underline"
-                        >
-                          Mark all read
-                        </button>
-                      )}
-                      <span className="text-[11px] font-mono text-[#526259]">{activeClinic.id}</span>
-                    </div>
-                  </div>
-                  <div className="divide-y divide-[#E3E8E4] max-h-96 overflow-y-auto">
-                    {pendingVerificationsCount > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          navigateToTab('profile');
-                          setNotifOpen(false);
-                        }}
-                        className="w-full text-left px-4 py-3 bg-amber-50/75 hover:bg-amber-50 transition-colors flex items-start gap-2.5"
-                      >
-                        <ShieldCheck
-                          className="w-4 h-4 text-amber-700 mt-0.5 shrink-0"
-                          aria-hidden="true"
-                        />
-                        <div className="min-w-0">
-                          <div className="text-xs font-semibold text-amber-950">
-                            {pendingVerificationsCount} pending verification request
-                            {pendingVerificationsCount === 1 ? '' : 's'}
-                          </div>
-                          <div className="text-[11px] text-amber-800 mt-0.5">
-                            {accountSession.pendingDoctorApplications.length} doctor application(s) ·{' '}
-                            {accountSession.pendingPatientLinkRequests.length} patient link request(s)
-                          </div>
-                        </div>
-                      </button>
-                    )}
-
-                    {notificationsList.map((n) => (
-                      <button
-                        key={n.id}
-                        type="button"
-                        onClick={async () => {
-                          if (!n.isRead) {
-                            await markNotificationRead(n.id).catch(() => {});
-                            setNotificationsList((prev) =>
-                              prev.map((item) =>
-                                item.id === n.id ? { ...item, isRead: true } : item
-                              )
-                            );
-                            setUnreadNotificationsCount((c) => Math.max(0, c - 1));
-                          }
-                          if (n.relatedType === 'appointment') {
-                            navigateToTab('appointments');
-                          } else if (n.relatedType === 'followup') {
-                            navigateToTab('followups');
-                          } else if (
-                            n.relatedType === 'doctor_application' ||
-                            n.relatedType === 'patient_link'
-                          ) {
-                            navigateToTab('profile');
-                          }
-                          setNotifOpen(false);
-                        }}
-                        className={`w-full text-left px-4 py-2.5 hover:bg-[#F6F8F6] transition-colors flex items-start gap-2.5 ${
-                          n.isRead ? 'opacity-75' : 'bg-[#F9FBFA]'
-                        }`}
-                      >
-                        <Bell
-                          className={`w-3.5 h-3.5 mt-0.5 shrink-0 ${
-                            n.isRead ? 'text-[#8E9B94]' : 'text-[#047857]'
-                          }`}
-                          aria-hidden="true"
-                        />
-                        <div className="min-w-0 flex-1">
-                          <div className="text-xs font-semibold text-[#111C17] flex items-center justify-between gap-2">
-                            <span className="truncate">{n.title}</span>
-                            {!n.isRead && (
-                              <span className="text-[10px] font-mono text-[#047857] shrink-0">
-                                New
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-[11px] text-[#526259] mt-0.5">{n.message}</div>
-                        </div>
-                      </button>
-                    ))}
-
-                    {operationalAlerts.map((alert) => (
-                      <button
-                        key={alert.id}
-                        type="button"
-                        onClick={() => {
-                          if (alert.id === 'unconfirmed-today') {
-                            handleNavigateToFiltered({
-                              tab: 'appointments',
-                              status: 'Scheduled',
-                              date: dailySnapshot?.date ?? '',
-                            });
-                          } else if (alert.id === 'overdue-followups') {
-                            handleNavigateToFiltered({
-                              tab: 'followups',
-                              followUpView: 'overdue',
-                            });
-                          } else {
-                            navigateToTab(alert.targetTab);
-                          }
-                          setNotifOpen(false);
-                        }}
-                        className="w-full text-left px-4 py-3 hover:bg-[#F6F8F6] transition-colors flex items-start gap-2.5"
-                      >
-                        {alert.severity === 'red' ? (
-                          <AlertTriangle
-                            className="w-4 h-4 text-red-700 mt-0.5 shrink-0"
-                            aria-hidden="true"
-                          />
-                        ) : alert.severity === 'amber' ? (
-                          <Clock
-                            className="w-4 h-4 text-amber-700 mt-0.5 shrink-0"
-                            aria-hidden="true"
-                          />
-                        ) : (
-                          <CheckCircle2
-                            className="w-4 h-4 text-[#047857] mt-0.5 shrink-0"
-                            aria-hidden="true"
-                          />
-                        )}
-                        <div className="min-w-0">
-                          <div className="text-xs font-semibold text-[#111C17]">
-                            {alert.title}
-                          </div>
-                          <div className="text-[11px] text-[#526259] mt-0.5">
-                            {alert.detail}
-                          </div>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Settings Shortcut */}
+            className={`flex flex-col gap-2 pt-3 border-t border-white/10 ${
+              sidebarCollapsed ? 'items-center' : 'items-stretch'
+            }`}
+          >
             <button
               type="button"
               onClick={() => navigateToTab('settings')}
-              className={`hidden lg:inline-flex p-2 border rounded-lg transition-colors ${
+              aria-label="Settings"
+              aria-current={activeTab === 'settings' ? 'page' : undefined}
+              title={sidebarCollapsed ? 'Settings' : undefined}
+              className={`group relative btn-press flex items-center ${
+                sidebarCollapsed
+                  ? 'w-11 h-11 justify-center'
+                  : 'w-full gap-3 px-3.5 py-2.5'
+              } rounded-2xl transition-all ${
                 activeTab === 'settings'
-                  ? 'text-[#0B261C] bg-[#ECF4EF] border-[#C6DFD1]'
-                  : 'text-[#526259] hover:text-[#111C17] hover:bg-[#F6F8F6] border-[#E3E8E4]'
+                  ? 'bg-[#34C38F] text-white shadow-sm'
+                  : 'text-emerald-100/80 hover:bg-white/12 hover:text-white hover:-translate-y-0.5'
               }`}
-              aria-label="Open clinic settings"
-              title="Clinic settings"
             >
-              <Settings className="w-4 h-4" aria-hidden="true" />
+              <Settings className="w-[19px] h-[19px] shrink-0" aria-hidden="true" />
+              {!sidebarCollapsed && <span className="text-xs font-semibold">Settings</span>}
+              {sidebarCollapsed && (
+                <span className="pointer-events-none opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity absolute left-full ml-3 px-2.5 py-1 rounded-full bg-[#1C2B25] text-white text-[11px] font-semibold whitespace-nowrap shadow-md z-50">
+                  Settings
+                </span>
+              )}
             </button>
 
-            {/* User Profile Button */}
             <button
               type="button"
-              onClick={() => navigateToTab('profile')}
-              className={`hidden sm:inline-flex items-center gap-2 pl-1.5 pr-2 xl:pr-2.5 py-1 text-xs border rounded-lg transition-colors whitespace-nowrap ${
-                activeTab === 'profile'
-                  ? 'bg-[#ECF4EF] border-[#C6DFD1] text-[#0B261C]'
-                  : 'bg-[#F6F8F6] hover:bg-[#ECF4EF] border-[#E3E8E4] text-[#111C17]'
-              }`}
-              title="Open personal administrator profile"
+              onClick={handleSignOut}
+              aria-label="Sign Out"
+              title={sidebarCollapsed ? 'Sign Out' : undefined}
+              className={`group relative btn-press flex items-center ${
+                sidebarCollapsed
+                  ? 'w-11 h-11 justify-center'
+                  : 'w-full gap-3 px-3.5 py-2.5'
+              } rounded-2xl text-emerald-100/80 hover:bg-white/12 hover:text-white hover:-translate-y-0.5 transition-all`}
             >
-              {renderUserAvatar('w-6 h-6')}
-              <ShieldCheck className="w-3.5 h-3.5 text-[#047857]" aria-hidden="true" />
-              <span className="hidden xl:inline font-medium">{user.fullName}</span>
+              <LogOut className="w-[19px] h-[19px] shrink-0" aria-hidden="true" />
+              {!sidebarCollapsed && <span className="text-xs font-semibold">Logout</span>}
+              {sidebarCollapsed && (
+                <span className="pointer-events-none opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity absolute left-full ml-3 px-2.5 py-1 rounded-full bg-[#1C2B25] text-white text-[11px] font-semibold whitespace-nowrap shadow-md z-50">
+                  Logout
+                </span>
+              )}
             </button>
+          </div>
+        </aside>
 
-            {topCtaLabel && (
+        {/* 2. Central Workspace + Conditional Right Rail */}
+        <div className="flex-1 min-w-0 flex flex-col gap-5">
+          {/* Lightweight Header (No heavy bar) */}
+          <header className="flex flex-wrap items-center justify-between gap-4 px-1 sm:px-2 pt-1">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="lg:hidden">
+                <CareDeskLogoMark className="w-9 h-9" />
+              </div>
+              <div className="min-w-0">
+                <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-[#1C2B25] truncate">
+                  {headerHeading}
+                </h1>
+                <p className="text-xs sm:text-[13px] text-[#6B7B73] truncate mt-0.5">
+                  {headerSubtitle}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 sm:gap-2.5 shrink-0 flex-wrap">
+              {/* Search Pill */}
+              <div ref={searchContainerRef} className="relative hidden md:block w-48 lg:w-64">
+                <Search
+                  className="w-3.5 h-3.5 text-[#6B7B73] absolute left-3.5 top-1/2 -translate-y-1/2"
+                  aria-hidden="true"
+                />
+                <input
+                  id="global-search"
+                  type="search"
+                  value={globalSearch}
+                  onFocus={() => setSearchOpen(true)}
+                  onChange={(e) => {
+                    setGlobalSearch(e.target.value);
+                    setSearchOpen(true);
+                  }}
+                  placeholder="Search patient, staff, ID..."
+                  aria-label="Global clinic search"
+                  className="w-full pl-9 pr-4 py-2 text-xs bg-white border border-[#DCE8E0] rounded-full focus:outline-none focus:ring-2 focus:ring-[#34C38F]/25 focus:border-[#34C38F]"
+                />
+
+                {searchOpen && globalSearch.trim().length > 0 && (
+                  <div className="absolute right-0 mt-2 w-80 bg-white border border-[#DCE8E0] rounded-2xl shadow-xl z-40 overflow-hidden">
+                    <div className="px-4 py-2 border-b border-[#EEF3EF] bg-[#FAFBF9] text-[11px] font-semibold text-[#6B7B73] flex items-center justify-between">
+                      <span>Search Results ({activeClinic.id})</span>
+                      {searchLoading && <span>Searching...</span>}
+                    </div>
+                    {searchResults.patients.length === 0 &&
+                    searchResults.appointments.length === 0 &&
+                    searchResults.staff.length === 0 &&
+                    !searchLoading ? (
+                      <div className="px-4 py-5 text-xs text-[#6B7B73] text-center">
+                        No matching patients, staff, or appointments found.
+                      </div>
+                    ) : (
+                      <div className="max-h-72 overflow-y-auto divide-y divide-[#EEF3EF]">
+                        {searchResults.patients.map((pt) => (
+                          <button
+                            key={pt.id}
+                            type="button"
+                            onClick={() => {
+                              handleOpenPatientProfile(pt.id);
+                              setSearchOpen(false);
+                              setGlobalSearch('');
+                            }}
+                            className="w-full text-left px-4 py-2.5 hover:bg-[#FAFBF9] transition-colors"
+                          >
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="font-semibold text-[#1C2B25]">{pt.fullName}</span>
+                              <span className="font-mono text-[#137A55]">{pt.id}</span>
+                            </div>
+                            <div className="text-[11px] text-[#6B7B73] mt-0.5">
+                              Patient · {pt.administrativeStatus}
+                            </div>
+                          </button>
+                        ))}
+                        {searchResults.staff.map((stf) => (
+                          <button
+                            key={stf.id}
+                            type="button"
+                            onClick={() => {
+                              handleOpenStaffProfile(stf.id);
+                              setSearchOpen(false);
+                              setGlobalSearch('');
+                            }}
+                            className="w-full text-left px-4 py-2.5 hover:bg-[#FAFBF9] transition-colors"
+                          >
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="font-semibold text-[#1C2B25]">{stf.fullName}</span>
+                              <span className="font-mono text-[#0F3D2E]">{stf.id}</span>
+                            </div>
+                            <div className="text-[11px] text-[#6B7B73] mt-0.5">
+                              Staff ({stf.role}) · {stf.department}
+                            </div>
+                          </button>
+                        ))}
+                        {searchResults.appointments.map((apt) => (
+                          <button
+                            key={apt.id}
+                            type="button"
+                            onClick={() => {
+                              handleNavigateToFiltered({
+                                tab: 'appointments',
+                                date: apt.appointmentDate,
+                                status: 'All',
+                                appointmentId: apt.id,
+                              });
+                              setSearchOpen(false);
+                              setGlobalSearch('');
+                            }}
+                            className="w-full text-left px-4 py-2.5 hover:bg-[#FAFBF9] transition-colors"
+                          >
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="font-semibold text-[#1C2B25]">
+                                {apt.patientName ?? apt.patientId}
+                              </span>
+                              <span className="font-mono text-[#6B7B73]">{apt.id}</span>
+                            </div>
+                            <div className="text-[11px] text-[#6B7B73] mt-0.5 font-mono tabular-nums">
+                              {apt.appointmentDate} {apt.appointmentTime} · {apt.department}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Staff Roster Shortcut Pill (subtle quick link) */}
               <button
                 type="button"
-                onClick={handleTopPrimaryAction}
-                className="px-3 sm:px-3.5 py-2 text-xs sm:text-sm font-medium text-white bg-[#059669] hover:bg-[#047857] rounded-lg transition-colors whitespace-nowrap shrink-0"
-              >
-                {activeTab === 'dashboard' ? (
-                  <>
-                    <span className="hidden sm:inline">Schedule Appointment</span>
-                    <span className="sm:hidden">Book</span>
-                  </>
-                ) : (
-                  topCtaLabel
-                )}
-              </button>
-            )}
-          </div>
-        </header>
-
-        {/* Global Toast Notifications */}
-        {toasts.length > 0 && (
-          <div
-            className="mx-4 sm:mx-6 mt-4 space-y-2"
-            aria-live="polite"
-            aria-atomic="true"
-          >
-            {toasts.map((toast) => (
-              <div
-                key={toast.id}
-                role={toast.kind === 'error' ? 'alert' : 'status'}
-                className={`animate-toast-enter px-4 py-3 rounded-xl border flex items-center justify-between gap-4 text-xs ${
-                  toast.kind === 'error'
-                    ? 'bg-red-50 border-red-200 text-red-800'
-                    : 'bg-[#ECF4EF] border-[#B7DFCA] text-[#0B261C]'
+                onClick={() => navigateToTab('staff')}
+                className={`hidden sm:inline-flex items-center gap-1.5 px-3 py-2 rounded-full border text-xs font-semibold transition-colors ${
+                  activeTab === 'staff'
+                    ? 'bg-[#0F3D2E] border-[#0F3D2E] text-white'
+                    : 'bg-white border-[#DCE8E0] text-[#1C2B25] hover:bg-[#EEF3EF]'
                 }`}
+                aria-label="Open staff roster"
+                title="Staff & Clinicians"
               >
-                <div className="flex items-center gap-2 font-medium">
-                  {toast.kind === 'error' ? (
-                    <AlertTriangle className="w-4 h-4 text-red-700 shrink-0" aria-hidden="true" />
-                  ) : (
-                    <CheckCircle2 className="w-4 h-4 text-[#047857] shrink-0" aria-hidden="true" />
-                  )}
-                  <span>{toast.message}</span>
-                </div>
+                <Stethoscope className="w-3.5 h-3.5" aria-hidden="true" />
+                <span className="hidden xl:inline">Staff</span>
+              </button>
+
+              {/* Notification Bell with Dot */}
+              <div ref={notifContainerRef} className="relative">
                 <button
                   type="button"
-                  onClick={() =>
-                    setToasts((prev) => prev.filter((item) => item.id !== toast.id))
-                  }
-                  className="p-1 opacity-75 hover:opacity-100"
-                  aria-label="Dismiss notification"
+                  onClick={() => setNotifOpen((prev) => !prev)}
+                  className="btn-press relative w-10 h-10 flex items-center justify-center text-[#1C2B25] bg-white hover:bg-[#EEF3EF] border border-[#DCE8E0] rounded-full transition-colors"
+                  aria-label="Operational notifications"
+                  aria-expanded={notifOpen}
                 >
-                  <X className="w-3.5 h-3.5" aria-hidden="true" />
+                  <Bell className="w-4 h-4" aria-hidden="true" />
+                  {alertBadgeCount > 0 && (
+                    <span
+                      className="absolute top-2 right-2.5 w-2 h-2 rounded-full bg-[#34C38F] ring-2 ring-white"
+                      aria-label={`${alertBadgeCount} active alerts`}
+                    />
+                  )}
                 </button>
-              </div>
-            ))}
-          </div>
-        )}
 
-        {/* Active View Viewport */}
-        <main className="flex-1 p-4 sm:p-6 max-w-[1440px] w-full mx-auto">
+                {notifOpen && (
+                  <div className="absolute right-0 mt-2 w-96 max-w-[92vw] bg-white border border-[#DCE8E0] rounded-2xl shadow-xl z-40 overflow-hidden">
+                    <div className="px-4 py-3 border-b border-[#EEF3EF] bg-[#FAFBF9] flex items-center justify-between gap-2">
+                      <span className="text-xs font-bold text-[#1C2B25]">
+                        Operational Notifications ({alertBadgeCount})
+                      </span>
+                      <div className="flex items-center gap-2">
+                        {unreadNotificationsCount > 0 && (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              await markAllNotificationsRead().catch(() => {});
+                              setNotificationsList((prev) =>
+                                prev.map((item) => ({ ...item, isRead: true }))
+                              );
+                              setUnreadNotificationsCount(0);
+                            }}
+                            className="text-[11px] font-semibold text-[#137A55] hover:underline"
+                          >
+                            Mark all read
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <div className="divide-y divide-[#EEF3EF] max-h-96 overflow-y-auto">
+                      {pendingVerificationsCount > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigateToTab('profile');
+                            setNotifOpen(false);
+                          }}
+                          className="w-full text-left px-4 py-3 bg-amber-50/75 hover:bg-amber-50 transition-colors flex items-start gap-2.5"
+                        >
+                          <ShieldCheck
+                            className="w-4 h-4 text-amber-700 mt-0.5 shrink-0"
+                            aria-hidden="true"
+                          />
+                          <div className="min-w-0">
+                            <div className="text-xs font-semibold text-amber-950">
+                              {pendingVerificationsCount} pending verification request
+                              {pendingVerificationsCount === 1 ? '' : 's'}
+                            </div>
+                            <div className="text-[11px] text-amber-800 mt-0.5">
+                              {accountSession.pendingDoctorApplications.length} doctor app(s) ·{' '}
+                              {accountSession.pendingPatientLinkRequests.length} patient link(s)
+                            </div>
+                          </div>
+                        </button>
+                      )}
+
+                      {notificationsList.map((n) => (
+                        <button
+                          key={n.id}
+                          type="button"
+                          onClick={async () => {
+                            if (!n.isRead) {
+                              await markNotificationRead(n.id).catch(() => {});
+                              setNotificationsList((prev) =>
+                                prev.map((item) =>
+                                  item.id === n.id ? { ...item, isRead: true } : item
+                                )
+                              );
+                              setUnreadNotificationsCount((c) => Math.max(0, c - 1));
+                            }
+                            if (n.relatedType === 'appointment') {
+                              navigateToTab('appointments');
+                            } else if (n.relatedType === 'followup') {
+                              navigateToTab('followups');
+                            } else if (
+                              n.relatedType === 'doctor_application' ||
+                              n.relatedType === 'patient_link'
+                            ) {
+                              navigateToTab('profile');
+                            }
+                            setNotifOpen(false);
+                          }}
+                          className={`w-full text-left px-4 py-2.5 hover:bg-[#FAFBF9] transition-colors flex items-start gap-2.5 ${
+                            n.isRead ? 'opacity-70' : ''
+                          }`}
+                        >
+                          <Bell
+                            className={`w-3.5 h-3.5 mt-0.5 shrink-0 ${
+                              n.isRead ? 'text-[#6B7B73]' : 'text-[#137A55]'
+                            }`}
+                            aria-hidden="true"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="text-xs font-semibold text-[#1C2B25] flex items-center justify-between gap-2">
+                              <span className="truncate">{n.title}</span>
+                              {!n.isRead && (
+                                <span className="text-[10px] font-mono text-[#137A55] shrink-0">
+                                  New
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[11px] text-[#6B7B73] mt-0.5">{n.message}</div>
+                          </div>
+                        </button>
+                      ))}
+
+                      {operationalAlerts.map((alert) => (
+                        <button
+                          key={alert.id}
+                          type="button"
+                          onClick={() => {
+                            if (alert.id === 'unconfirmed-today') {
+                              handleNavigateToFiltered({
+                                tab: 'appointments',
+                                status: 'Scheduled',
+                                date: dailySnapshot?.date ?? '',
+                              });
+                            } else if (alert.id === 'overdue-followups') {
+                              handleNavigateToFiltered({
+                                tab: 'followups',
+                                followUpView: 'overdue',
+                              });
+                            } else {
+                              navigateToTab(alert.targetTab);
+                            }
+                            setNotifOpen(false);
+                          }}
+                          className="w-full text-left px-4 py-3 hover:bg-[#FAFBF9] transition-colors flex items-start gap-2.5"
+                        >
+                          {alert.severity === 'red' ? (
+                            <AlertTriangle
+                              className="w-4 h-4 text-rose-600 mt-0.5 shrink-0"
+                              aria-hidden="true"
+                            />
+                          ) : alert.severity === 'amber' ? (
+                            <Clock
+                              className="w-4 h-4 text-amber-600 mt-0.5 shrink-0"
+                              aria-hidden="true"
+                            />
+                          ) : (
+                            <CheckCircle2
+                              className="w-4 h-4 text-[#137A55] mt-0.5 shrink-0"
+                              aria-hidden="true"
+                            />
+                          )}
+                          <div className="min-w-0">
+                            <div className="text-xs font-semibold text-[#1C2B25]">
+                              {alert.title}
+                            </div>
+                            <div className="text-[11px] text-[#6B7B73] mt-0.5">
+                              {alert.detail}
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Profile Avatar Pill */}
+              <button
+                type="button"
+                onClick={() => navigateToTab('profile')}
+                className={`hidden sm:inline-flex items-center gap-2 pl-1.5 pr-3 py-1 rounded-full border text-left transition-colors ${
+                  activeTab === 'profile'
+                    ? 'bg-[#E3F7EF] border-[#34C38F] text-[#0F3D2E]'
+                    : 'bg-white border-[#DCE8E0] hover:bg-[#EEF3EF] text-[#1C2B25]'
+                }`}
+                title="Open administrator profile & team"
+              >
+                {renderUserAvatar('w-7 h-7')}
+                <div className="hidden xl:block leading-tight">
+                  <div className="text-xs font-semibold text-[#1C2B25] truncate max-w-[120px]">
+                    {user.fullName}
+                  </div>
+                  <div className="text-[10px] text-[#6B7B73] truncate">
+                    {activeMembership?.role ?? 'Administrator'}
+                  </div>
+                </div>
+              </button>
+
+              {/* Primary + New Appointment Pill */}
+              {permissions.canManageAppointments && (
+                <button
+                  type="button"
+                  onClick={handleQuickScheduleAppointment}
+                  className="btn-press px-4 py-2.5 text-xs sm:text-sm font-semibold text-white bg-[#34C38F] hover:bg-[#24B07D] rounded-full shadow-xs transition-colors whitespace-nowrap shrink-0"
+                >
+                  + New Appointment
+                </button>
+              )}
+            </div>
+          </header>
+
+          {/* Inline Toasts */}
+          {toasts.length > 0 && (
+            <div className="space-y-2 px-1" aria-live="polite" aria-atomic="true">
+              {toasts.map((toast) => (
+                <div
+                  key={toast.id}
+                  role={toast.kind === 'error' ? 'alert' : 'status'}
+                  className={`animate-toast-enter px-4 py-2.5 rounded-2xl border flex items-center justify-between gap-4 text-xs ${
+                    toast.kind === 'error'
+                      ? 'bg-rose-50 border-rose-200 text-rose-800'
+                      : 'bg-[#E3F7EF] border-[#B5E5D0] text-[#0F3D2E]'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 font-semibold">
+                    {toast.kind === 'error' ? (
+                      <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" aria-hidden="true" />
+                    ) : (
+                      <CheckCircle2 className="w-4 h-4 text-[#137A55] shrink-0" aria-hidden="true" />
+                    )}
+                    <span>{toast.message}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setToasts((prev) => prev.filter((item) => item.id !== toast.id))
+                    }
+                    className="p-1 opacity-75 hover:opacity-100"
+                    aria-label="Dismiss notification"
+                  >
+                    <X className="w-3.5 h-3.5" aria-hidden="true" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Central Workspace + Conditional Right-Hand Rail (Dashboard & Appointments only) */}
           <div
-            key={`${activeClinic.id}-${activeTab}-${routePatientId ?? ''}-${routeStaffId ?? ''}`}
-            className="animate-view-enter"
+            className={`flex-1 min-w-0 ${
+              showRightRail ? 'grid grid-cols-1 xl:grid-cols-12 gap-5 items-start' : ''
+            }`}
           >
-            {activeTab === 'dashboard' && (
-              <DashboardView
-                onNavigate={(tab) => navigateToTab(tab)}
-                onNavigateToFiltered={handleNavigateToFiltered}
-                onQuickRegisterPatient={handleQuickRegisterPatient}
-                onQuickScheduleAppointment={handleQuickScheduleAppointment}
-                onLaunchAssistantPrompt={handleLaunchAssistantPrompt}
-                actorName={user.fullName}
-                onErrorNotice={handleErrorNotice}
-                onSuccessNotice={handleSuccessNotice}
-                refreshSignal={refreshSignal}
-                compactDensity={compactDensity}
-              />
-            )}
-            {activeTab === 'assistant' && (
-              <AssistantView
-                onDataMutated={handleDataMutated}
-                onErrorNotice={handleErrorNotice}
-                onSuccessNotice={handleSuccessNotice}
-                onNavigateToFiltered={handleNavigateToFiltered}
-                initialPrompt={pendingAssistantPrompt}
-                onInitialPromptConsumed={() => setPendingAssistantPrompt(null)}
-              />
-            )}
-            {activeTab === 'patients' &&
-              (routePatientId ? (
-                <PatientProfilePage
-                  patientId={routePatientId}
-                  sessionRole={patientUiRole}
-                  refreshSignal={refreshSignal}
-                  onBack={() => navigateToTab('patients')}
-                  onDataMutated={handleDataMutated}
-                  onErrorNotice={handleErrorNotice}
-                  onSuccessNotice={handleSuccessNotice}
-                  onQuickScheduleForPatient={handleQuickScheduleForPatient}
-                  onOpenAppointment={(apt) =>
+            <main className={showRightRail ? 'xl:col-span-8 min-w-0' : 'min-w-0'}>
+              <div
+                key={`${activeClinic.id}-${activeTab}-${routePatientId ?? ''}-${routeStaffId ?? ''}`}
+                className="animate-view-enter"
+              >
+                {activeTab === 'dashboard' && (
+                  <DashboardView
+                    onNavigate={(tab) => navigateToTab(tab)}
+                    onNavigateToFiltered={handleNavigateToFiltered}
+                    onQuickRegisterPatient={handleQuickRegisterPatient}
+                    onQuickScheduleAppointment={handleQuickScheduleAppointment}
+                    onLaunchAssistantPrompt={handleLaunchAssistantPrompt}
+                    actorName={user.fullName}
+                    activeDate={focusDate}
+                    onSelectDate={setFocusDate}
+                    onDataSnapshot={({ overview, dayAppointments }) => {
+                      setRightRailOverview(overview);
+                      setRightRailDayAppointments(dayAppointments);
+                    }}
+                    onErrorNotice={handleErrorNotice}
+                    onSuccessNotice={handleSuccessNotice}
+                    refreshSignal={refreshSignal}
+                    compactDensity={compactDensity}
+                  />
+                )}
+                {activeTab === 'assistant' && (
+                  <AssistantView
+                    onDataMutated={handleDataMutated}
+                    onErrorNotice={handleErrorNotice}
+                    onSuccessNotice={handleSuccessNotice}
+                    onNavigateToFiltered={handleNavigateToFiltered}
+                    initialPrompt={pendingAssistantPrompt}
+                    onInitialPromptConsumed={() => setPendingAssistantPrompt(null)}
+                  />
+                )}
+                {activeTab === 'patients' &&
+                  (routePatientId ? (
+                    <PatientProfilePage
+                      patientId={routePatientId}
+                      sessionRole={patientUiRole}
+                      refreshSignal={refreshSignal}
+                      onBack={() => navigateToTab('patients')}
+                      onDataMutated={handleDataMutated}
+                      onErrorNotice={handleErrorNotice}
+                      onSuccessNotice={handleSuccessNotice}
+                      onQuickScheduleForPatient={handleQuickScheduleForPatient}
+                      onOpenAppointment={(apt) =>
+                        handleNavigateToFiltered({
+                          tab: 'appointments',
+                          date: apt.appointmentDate,
+                          status: 'All',
+                          appointmentId: apt.id,
+                        })
+                      }
+                      onOpenStaffByName={handleOpenStaffByName}
+                    />
+                  ) : (
+                    <PatientsView
+                      onDataMutated={handleDataMutated}
+                      onErrorNotice={handleErrorNotice}
+                      onSuccessNotice={handleSuccessNotice}
+                      onQuickScheduleForPatient={handleQuickScheduleForPatient}
+                      openCreateSignal={patientCreateSignal}
+                      initialStatusFilter={patientsStatusFilter}
+                      onOpenPatient={handleOpenPatientProfile}
+                      sessionRole={patientUiRole}
+                      compactDensity={compactDensity}
+                    />
+                  ))}
+                {activeTab === 'appointments' && (
+                  <AppointmentsView
+                    onDataMutated={handleDataMutated}
+                    onErrorNotice={handleErrorNotice}
+                    onSuccessNotice={handleSuccessNotice}
+                    openCreateSignal={appointmentCreateSignal}
+                    prefillPatientId={prefillAppointmentPatientId}
+                    initialStatusFilter={appointmentsStatusFilter}
+                    initialDateFilter={appointmentsDateFilter}
+                    initialDetailAppointmentId={selectedAppointmentIdForDetail}
+                    activeDate={focusDate}
+                    onSelectDate={setFocusDate}
+                    selectedDetail={railSelectedAppointment}
+                    onSelectDetail={setRailSelectedAppointment}
+                    onDayAppointmentsChange={setRightRailDayAppointments}
+                    railActionSignal={appointmentsRailAction}
+                    onOpenPatient={handleOpenPatientProfile}
+                    onOpenStaffByName={handleOpenStaffByName}
+                    sessionRole={appointmentUiRole}
+                    compactDensity={compactDensity}
+                  />
+                )}
+                {activeTab === 'followups' && (
+                  <FollowUpsView
+                    onDataMutated={handleDataMutated}
+                    onErrorNotice={handleErrorNotice}
+                    onSuccessNotice={handleSuccessNotice}
+                    openCreateSignal={followupCreateSignal}
+                    initialViewMode={followupsViewMode}
+                    onOpenPatient={handleOpenPatientProfile}
+                    canManageFollowups={permissions.canManageFollowups}
+                    compactDensity={compactDensity}
+                  />
+                )}
+                {activeTab === 'staff' &&
+                  (routeStaffId ? (
+                    <StaffProfilePage
+                      staffId={routeStaffId}
+                      sessionRole={staffUiRole}
+                      refreshSignal={refreshSignal}
+                      onBack={() => navigateToTab('staff')}
+                      onDataMutated={handleDataMutated}
+                      onErrorNotice={handleErrorNotice}
+                      onSuccessNotice={handleSuccessNotice}
+                      onOpenPatient={handleOpenPatientProfile}
+                      onOpenAppointment={(apt) =>
+                        handleNavigateToFiltered({
+                          tab: 'appointments',
+                          date: apt.appointmentDate,
+                          status: 'All',
+                          appointmentId: apt.id,
+                        })
+                      }
+                    />
+                  ) : (
+                    <StaffView
+                      onOpenStaff={handleOpenStaffProfile}
+                      onErrorNotice={handleErrorNotice}
+                      refreshSignal={refreshSignal}
+                      compactDensity={compactDensity}
+                    />
+                  ))}
+                {activeTab === 'reports' && (
+                  <ReportsApiView
+                    onErrorNotice={handleErrorNotice}
+                    onSuccessNotice={handleSuccessNotice}
+                    refreshSignal={refreshSignal}
+                  />
+                )}
+                {activeTab === 'profile' && (
+                  <AdminProfilePage
+                    session={accountSession}
+                    onSessionRefresh={handleSessionRefresh}
+                    onDataMutated={handleDataMutated}
+                    onErrorNotice={handleErrorNotice}
+                    onSuccessNotice={handleSuccessNotice}
+                    onSignOut={handleSignOut}
+                  />
+                )}
+                {activeTab === 'settings' && (
+                  <SettingsView
+                    session={accountSession}
+                    onOpenProfile={() => navigateToTab('profile')}
+                    compactDensity={compactDensity}
+                    onToggleCompactDensity={setCompactDensity}
+                    sidebarCollapsed={sidebarCollapsed}
+                    onToggleSidebarCollapsed={setSidebarCollapsed}
+                    onSuccessNotice={handleSuccessNotice}
+                  />
+                )}
+              </div>
+            </main>
+
+            {showRightRail && (
+              <div className="xl:col-span-4">
+                <RightRail
+                  mode={activeTab === 'appointments' ? 'appointments' : 'dashboard'}
+                  user={user}
+                  roleLabel={activeMembership?.role ?? 'Clinic Administrator'}
+                  activeClinic={activeClinic}
+                  clinics={clinics}
+                  avatarLoadError={avatarLoadError}
+                  onAvatarError={() => setAvatarLoadError(true)}
+                  onSwitchClinic={handleSwitchClinic}
+                  onOpenProfile={() => navigateToTab('profile')}
+                  onOpenStaffRoster={() => navigateToTab('staff')}
+                  focusDate={focusDate}
+                  todayDate={todayDateIso}
+                  onSelectDate={setFocusDate}
+                  dayAppointments={rightRailDayAppointments}
+                  overview={rightRailOverview || overviewSnapshot}
+                  onOpenAppointmentDetail={(apt) =>
                     handleNavigateToFiltered({
                       tab: 'appointments',
-                      date: '',
+                      date: apt.appointmentDate,
                       status: 'All',
                       appointmentId: apt.id,
                     })
                   }
+                  selectedAppointment={railSelectedAppointment}
+                  canWrite={permissions.canManageAppointments}
+                  onSelectAppointment={setRailSelectedAppointment}
+                  onEditAppointment={(apt) =>
+                    setAppointmentsRailAction({ type: 'edit', apt, seq: Date.now() })
+                  }
+                  onCancelAppointment={(apt) =>
+                    setAppointmentsRailAction({ type: 'cancel', apt, seq: Date.now() })
+                  }
+                  onDeleteAppointment={(apt) =>
+                    setAppointmentsRailAction({ type: 'delete', apt, seq: Date.now() })
+                  }
+                  onTriageRequest={(apt, action) =>
+                    setAppointmentsRailAction({
+                      type: action === 'approve_cancel' ? 'triage_cancel' : 'triage_clear',
+                      apt,
+                      seq: Date.now(),
+                    })
+                  }
+                  onOpenPatient={handleOpenPatientProfile}
                   onOpenStaffByName={handleOpenStaffByName}
+                  onQuickBookDate={(d) => {
+                    setFocusDate(d);
+                    handleQuickScheduleAppointment();
+                  }}
                 />
-              ) : (
-                <PatientsView
-                  onDataMutated={handleDataMutated}
-                  onErrorNotice={handleErrorNotice}
-                  onSuccessNotice={handleSuccessNotice}
-                  onQuickScheduleForPatient={handleQuickScheduleForPatient}
-                  openCreateSignal={patientCreateSignal}
-                  initialStatusFilter={patientsStatusFilter}
-                  onOpenPatient={handleOpenPatientProfile}
-                  sessionRole={patientUiRole}
-                  compactDensity={compactDensity}
-                />
-              ))}
-            {activeTab === 'appointments' && (
-              <AppointmentsView
-                onDataMutated={handleDataMutated}
-                onErrorNotice={handleErrorNotice}
-                onSuccessNotice={handleSuccessNotice}
-                openCreateSignal={appointmentCreateSignal}
-                prefillPatientId={prefillAppointmentPatientId}
-                initialStatusFilter={appointmentsStatusFilter}
-                initialDateFilter={appointmentsDateFilter}
-                initialDetailAppointmentId={selectedAppointmentIdForDetail}
-                onOpenPatient={handleOpenPatientProfile}
-                onOpenStaffByName={handleOpenStaffByName}
-                sessionRole={appointmentUiRole}
-                compactDensity={compactDensity}
-              />
-            )}
-            {activeTab === 'followups' && (
-              <FollowUpsView
-                onDataMutated={handleDataMutated}
-                onErrorNotice={handleErrorNotice}
-                onSuccessNotice={handleSuccessNotice}
-                openCreateSignal={followupCreateSignal}
-                initialViewMode={followupsViewMode}
-                onOpenPatient={handleOpenPatientProfile}
-                canManageFollowups={permissions.canManageFollowups}
-                compactDensity={compactDensity}
-              />
-            )}
-            {activeTab === 'staff' &&
-              (routeStaffId ? (
-                <StaffProfilePage
-                  staffId={routeStaffId}
-                  sessionRole={staffUiRole}
-                  refreshSignal={refreshSignal}
-                  onBack={() => navigateToTab('staff')}
-                  onDataMutated={handleDataMutated}
-                  onErrorNotice={handleErrorNotice}
-                  onSuccessNotice={handleSuccessNotice}
-                  onOpenPatient={handleOpenPatientProfile}
-                  onOpenAppointment={(apt) =>
-                    handleNavigateToFiltered({
-                      tab: 'appointments',
-                      date: '',
-                      status: 'All',
-                      appointmentId: apt.id,
-                    })
-                  }
-                />
-              ) : (
-                <StaffView
-                  onOpenStaff={handleOpenStaffProfile}
-                  onErrorNotice={handleErrorNotice}
-                  refreshSignal={refreshSignal}
-                  compactDensity={compactDensity}
-                />
-              ))}
-            {activeTab === 'reports' && (
-              <ReportsApiView
-                onErrorNotice={handleErrorNotice}
-                onSuccessNotice={handleSuccessNotice}
-                refreshSignal={refreshSignal}
-              />
-            )}
-            {activeTab === 'profile' && (
-              <AdminProfilePage
-                session={accountSession}
-                onSessionRefresh={handleSessionRefresh}
-                onDataMutated={handleDataMutated}
-                onErrorNotice={handleErrorNotice}
-                onSuccessNotice={handleSuccessNotice}
-                onSignOut={handleSignOut}
-              />
-            )}
-            {activeTab === 'settings' && (
-              <SettingsView
-                session={accountSession}
-                onOpenProfile={() => navigateToTab('profile')}
-                compactDensity={compactDensity}
-                onToggleCompactDensity={setCompactDensity}
-                sidebarCollapsed={sidebarCollapsed}
-                onToggleSidebarCollapsed={setSidebarCollapsed}
-                onSuccessNotice={handleSuccessNotice}
-              />
+              </div>
             )}
           </div>
-        </main>
+        </div>
       </div>
+
+      {/* Mobile Bottom Tab Bar (< lg) */}
+      <nav
+        aria-label="Mobile Navigation"
+        className="lg:hidden fixed bottom-0 inset-x-0 z-40 h-14 bg-[#0F3D2E] text-emerald-50 border-t border-white/10 px-2 flex items-center justify-around shadow-lg"
+      >
+        {[
+          { id: 'dashboard' as NavTab, label: 'Home', icon: Activity },
+          { id: 'patients' as NavTab, label: 'Patients', icon: Users },
+          { id: 'appointments' as NavTab, label: 'Visits', icon: Calendar },
+          { id: 'assistant' as NavTab, label: 'Assistant', icon: Bot },
+        ].map((item) => {
+          const Icon = item.icon;
+          const isActive = activeTab === item.id;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => {
+                navigateToTab(item.id);
+                setMobileMoreOpen(false);
+              }}
+              aria-current={isActive ? 'page' : undefined}
+              className={`flex flex-col items-center justify-center gap-0.5 px-3 py-1 rounded-xl transition-colors ${
+                isActive ? 'text-[#34C38F]' : 'text-emerald-100/75 hover:text-white'
+              }`}
+            >
+              <Icon className="w-4 h-4" aria-hidden="true" />
+              <span className="text-[10px] font-semibold">{item.label}</span>
+            </button>
+          );
+        })}
+        <button
+          type="button"
+          onClick={() => setMobileMoreOpen((v) => !v)}
+          aria-expanded={mobileMoreOpen}
+          className={`flex flex-col items-center justify-center gap-0.5 px-3 py-1 rounded-xl transition-colors ${
+            mobileMoreOpen ||
+            activeTab === 'followups' ||
+            activeTab === 'reports' ||
+            activeTab === 'staff' ||
+            activeTab === 'settings' ||
+            activeTab === 'profile'
+              ? 'text-[#34C38F]'
+              : 'text-emerald-100/75 hover:text-white'
+          }`}
+        >
+          <MoreHorizontal className="w-4 h-4" aria-hidden="true" />
+          <span className="text-[10px] font-semibold">More</span>
+        </button>
+      </nav>
+
+      {/* Mobile More Sheet */}
+      {mobileMoreOpen && (
+        <div className="lg:hidden fixed inset-0 z-50 flex items-end">
+          <div
+            className="fixed inset-0 bg-black/40 animate-modal-overlay"
+            onClick={() => setMobileMoreOpen(false)}
+            aria-hidden="true"
+          />
+          <div className="relative z-10 w-full rounded-t-[28px] bg-white border-t border-[#DCE8E0] p-5 pb-8 space-y-4 animate-modal-panel">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-bold text-[#1C2B25]">Workspace Sections</div>
+              <button
+                type="button"
+                onClick={() => setMobileMoreOpen(false)}
+                className="p-1.5 rounded-full hover:bg-[#EEF3EF]"
+                aria-label="Close menu"
+              >
+                <X className="w-4 h-4" aria-hidden="true" />
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-2.5">
+              {[
+                { id: 'followups' as NavTab, label: 'Follow-ups', icon: ClipboardList },
+                { id: 'reports' as NavTab, label: 'Reports', icon: FileBarChart },
+                { id: 'staff' as NavTab, label: 'Staff Roster', icon: Stethoscope },
+                { id: 'profile' as NavTab, label: 'My Profile', icon: UserCircle },
+                { id: 'settings' as NavTab, label: 'Settings', icon: Settings },
+              ].map((item) => {
+                const Icon = item.icon;
+                const active = activeTab === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => {
+                      navigateToTab(item.id);
+                      setMobileMoreOpen(false);
+                    }}
+                    className={`flex items-center gap-2.5 px-4 py-3 rounded-2xl border text-xs font-semibold ${
+                      active
+                        ? 'bg-[#0F3D2E] border-[#0F3D2E] text-white'
+                        : 'bg-[#FAFBF9] border-[#DCE8E0] text-[#1C2B25]'
+                    }`}
+                  >
+                    <Icon className="w-4 h-4 shrink-0" aria-hidden="true" />
+                    <span>{item.label}</span>
+                  </button>
+                );
+              })}
+              <button
+                type="button"
+                onClick={handleSignOut}
+                className="flex items-center gap-2.5 px-4 py-3 rounded-2xl border border-rose-200 bg-rose-50 text-xs font-semibold text-rose-800"
+              >
+                <LogOut className="w-4 h-4 shrink-0" aria-hidden="true" />
+                <span>Sign Out</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
