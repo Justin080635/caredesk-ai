@@ -181,16 +181,123 @@
   animation: toastSlideIn 180ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+@keyframes sageShimmer {
+  0% {
+    background-position: 180% 0;
+  }
+  100% {
+    background-position: -180% 0;
+  }
+}
+
+.sage-shimmer {
+  background: linear-gradient(110deg, #DDEAE2 8%, #F2F8F4 36%, #DDEAE2 66%);
+  background-size: 220% 100%;
+  animation: sageShimmer 1.45s cubic-bezier(0.25, 0.8, 0.25, 1) infinite;
+}
+
+@keyframes logoPulseRing {
+  0% {
+    transform: scale(0.88);
+    opacity: 0.72;
+  }
+  65% {
+    transform: scale(1.42);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.42);
+    opacity: 0;
+  }
+}
+
+.signature-ring-pulse {
+  animation: logoPulseRing 1.5s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+}
+
+@keyframes ecgDraw {
+  0% {
+    stroke-dashoffset: 560;
+    opacity: 0.35;
+  }
+  15% {
+    opacity: 1;
+  }
+  75% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+  100% {
+    stroke-dashoffset: -120;
+    opacity: 0.25;
+  }
+}
+
+.signature-ecg-path {
+  stroke-dasharray: 560;
+  stroke-dashoffset: 560;
+  animation: ecgDraw 1.25s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.signature-loader-shell {
+  opacity: 1;
+  transform: scale(1);
+  transition: opacity 320ms cubic-bezier(0.16, 1, 0.3, 1),
+    transform 320ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.signature-loader-exit {
+  opacity: 0;
+  transform: scale(1.03);
+  pointer-events: none;
+}
+
+@keyframes typingBounce {
+  0%, 80%, 100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+.typing-dot {
+  animation: typingBounce 1.1s infinite ease-in-out;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+    transition-duration: 180ms !important;
     scroll-behavior: auto !important;
   }
   .card-interactive:hover {
     transform: none !important;
+  }
+  .signature-ring-pulse {
+    animation: none !important;
+    opacity: 0.3;
+    transform: none !important;
+  }
+  .signature-ecg-path {
+    animation: none !important;
+    stroke-dashoffset: 0 !important;
+    opacity: 0.7;
+  }
+  .signature-loader-exit {
+    transform: none !important;
+  }
+  .sage-shimmer {
+    animation: none !important;
+    background: #E8F0EB !important;
+  }
+  .typing-dot {
+    animation: none !important;
+    opacity: 0.75;
   }
 }

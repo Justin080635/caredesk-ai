@@ -1075,59 +1075,94 @@ export function StaffProfilePage({
                   </p>
                 </div>
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse">
-                    <thead>
-                      <tr className="border-b border-[#E3E8E4] bg-[#F6F8F6] text-xs font-medium text-[#526259]">
-                        <th className="py-2.5 px-4">ID</th>
-                        <th className="py-2.5 px-4">Date &amp; Time</th>
-                        <th className="py-2.5 px-4">Patient</th>
-                        <th className="py-2.5 px-4">Department</th>
-                        <th className="py-2.5 px-4">Status</th>
-                        {onOpenAppointment && <th className="py-2.5 px-4 text-right">Action</th>}
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-[#EEF2EF] text-xs">
-                      {displayedAppointments.map((apt) => (
-                        <tr key={apt.id} className="hover:bg-[#F6F8F6] transition-colors">
-                          <td className="py-3 px-4 font-mono font-semibold text-[#0B261C] whitespace-nowrap">
-                            {apt.id}
-                          </td>
-                          <td className="py-3 px-4 font-mono tabular-nums text-[#111C17] whitespace-nowrap">
-                            {apt.appointmentDate} · {apt.appointmentTime}
-                          </td>
-                          <td className="py-3 px-4 whitespace-nowrap">
-                            <button
-                              type="button"
-                              onClick={() => onOpenPatient(apt.patientId)}
-                              className="font-medium text-[#047857] hover:underline"
-                            >
-                              {apt.patientName ?? apt.patientId}
-                            </button>
-                            <span className="font-mono text-[#526259] ml-1.5">{apt.patientId}</span>
-                          </td>
-                          <td className="py-3 px-4 text-[#526259] whitespace-nowrap">
-                            {apt.department}
-                          </td>
-                          <td className="py-3 px-4">
-                            <AppointmentStatusText status={apt.status} />
-                          </td>
-                          {onOpenAppointment && (
-                            <td className="py-3 px-4 text-right whitespace-nowrap">
+                <>
+                  <div className="md:hidden divide-y divide-[#EEF2EF]">
+                    {displayedAppointments.map((apt) => (
+                      <article key={apt.id} className="p-4 space-y-2 bg-white text-xs">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-mono font-semibold text-[#0B261C]">{apt.id}</span>
+                          <AppointmentStatusText status={apt.status} />
+                        </div>
+                        <div className="font-mono tabular-nums text-[#111C17]">
+                          {apt.appointmentDate} · {apt.appointmentTime}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => onOpenPatient(apt.patientId)}
+                            className="font-medium text-[#047857] hover:underline"
+                          >
+                            {apt.patientName ?? apt.patientId}
+                          </button>
+                          <span className="font-mono text-[#526259]">{apt.patientId}</span>
+                          <span className="text-[#526259]">· {apt.department}</span>
+                        </div>
+                        {onOpenAppointment && (
+                          <button
+                            type="button"
+                            onClick={() => onOpenAppointment(apt)}
+                            className="min-h-[44px] px-3.5 py-2 text-xs font-medium text-[#047857] bg-[#ECF4EF] rounded-full"
+                          >
+                            Inspect in Schedule
+                          </button>
+                        )}
+                      </article>
+                    ))}
+                  </div>
+                  <div className="hidden md:block overflow-x-auto">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="border-b border-[#E3E8E4] bg-[#F6F8F6] text-xs font-medium text-[#526259]">
+                          <th className="py-2.5 px-4">ID</th>
+                          <th className="py-2.5 px-4">Date &amp; Time</th>
+                          <th className="py-2.5 px-4">Patient</th>
+                          <th className="py-2.5 px-4">Department</th>
+                          <th className="py-2.5 px-4">Status</th>
+                          {onOpenAppointment && <th className="py-2.5 px-4 text-right">Action</th>}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#EEF2EF] text-xs">
+                        {displayedAppointments.map((apt) => (
+                          <tr key={apt.id} className="hover:bg-[#F6F8F6] transition-colors">
+                            <td className="py-3 px-4 font-mono font-semibold text-[#0B261C] whitespace-nowrap">
+                              {apt.id}
+                            </td>
+                            <td className="py-3 px-4 font-mono tabular-nums text-[#111C17] whitespace-nowrap">
+                              {apt.appointmentDate} · {apt.appointmentTime}
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap">
                               <button
                                 type="button"
-                                onClick={() => onOpenAppointment(apt)}
-                                className="text-xs font-medium text-[#047857] hover:text-[#0B261C]"
+                                onClick={() => onOpenPatient(apt.patientId)}
+                                className="font-medium text-[#047857] hover:underline"
                               >
-                                Inspect in Schedule
+                                {apt.patientName ?? apt.patientId}
                               </button>
+                              <span className="font-mono text-[#526259] ml-1.5">{apt.patientId}</span>
                             </td>
-                          )}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                            <td className="py-3 px-4 text-[#526259] whitespace-nowrap">
+                              {apt.department}
+                            </td>
+                            <td className="py-3 px-4">
+                              <AppointmentStatusText status={apt.status} />
+                            </td>
+                            {onOpenAppointment && (
+                              <td className="py-3 px-4 text-right whitespace-nowrap">
+                                <button
+                                  type="button"
+                                  onClick={() => onOpenAppointment(apt)}
+                                  className="text-xs font-medium text-[#047857] hover:text-[#0B261C]"
+                                >
+                                  Inspect in Schedule
+                                </button>
+                              </td>
+                            )}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
               )}
             </section>
           )}

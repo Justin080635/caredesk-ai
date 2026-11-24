@@ -24,6 +24,7 @@ import type {
 } from '../shared/types';
 import { ClinicEmptyIllustration, EditorialAvatar } from './ClinicIllustrations';
 import { ModalShell } from './ModalShell';
+import { TableSkeleton } from './Skeletons';
 import { AdminStatusText, AppointmentStatusText, FollowUpStatusText } from './StatusText';
 
 type SortField = 'id' | 'fullName' | 'dateOfBirth' | 'registrationDate' | 'administrativeStatus';
@@ -298,8 +299,8 @@ export function PatientsView({
 
       {/* Search & Filter Pills Bar */}
       <div className="card-surface rounded-[22px] p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3.5">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-3 flex-1">
-          <div className="relative flex-1 max-w-md">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 flex-1 min-w-0">
+          <div className="relative flex-1 sm:max-w-md min-w-0">
             <Search
               className="w-4 h-4 text-[#6B7B73] absolute left-3.5 top-1/2 -translate-y-1/2"
               aria-hidden="true"
@@ -313,12 +314,12 @@ export function PatientsView({
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search by ID (e.g. P-1042), name, phone, or email..."
-              className="w-full pl-10 pr-4 py-2 text-sm bg-[#FAFBF9] border border-[#DCE8E0] rounded-full focus:bg-white focus:outline-none focus:border-[#34C38F]"
+              className="w-full min-h-[44px] sm:min-h-0 pl-10 pr-4 py-2 text-sm bg-[#FAFBF9] border border-[#DCE8E0] rounded-full focus:bg-white focus:outline-none focus:border-[#34C38F]"
             />
           </div>
 
           <div
-            className="flex items-center gap-1 p-1 bg-[#EEF3EF] border border-[#DCE8E0] rounded-full overflow-x-auto"
+            className="flex items-center gap-1 p-1 bg-[#EEF3EF] border border-[#DCE8E0] rounded-full overflow-x-auto max-w-full"
             role="group"
             aria-label="Filter patients by administrative status"
           >
@@ -327,7 +328,7 @@ export function PatientsView({
                 key={tab}
                 type="button"
                 onClick={() => setStatusFilter(tab)}
-                className={`px-3.5 py-1.5 text-xs font-semibold rounded-full transition-colors whitespace-nowrap shrink-0 ${
+                className={`min-h-[44px] sm:min-h-0 px-3.5 py-1.5 text-xs font-semibold rounded-full transition-colors whitespace-nowrap shrink-0 ${
                   statusFilter === tab
                     ? 'bg-[#0F3D2E] text-white shadow-xs'
                     : 'text-[#6B7B73] hover:text-[#1C2B25]'
@@ -347,7 +348,7 @@ export function PatientsView({
             setFormError(null);
             setShowCreateModal(true);
           }}
-          className="btn-press inline-flex items-center gap-2 px-4 py-2 text-xs sm:text-sm font-bold text-[#0F3D2E] bg-[#34C38F] hover:bg-[#2bb482] rounded-full transition-colors whitespace-nowrap shrink-0 disabled:opacity-50"
+          className="btn-press min-h-[44px] sm:min-h-0 inline-flex items-center justify-center gap-2 px-4 py-2 text-xs sm:text-sm font-bold text-[#0F3D2E] bg-[#34C38F] hover:bg-[#2bb482] rounded-full transition-colors whitespace-nowrap shrink-0 disabled:opacity-50"
         >
           <Plus className="w-4 h-4" aria-hidden="true" />
           Register Patient
@@ -369,21 +370,7 @@ export function PatientsView({
         </div>
 
         {loading ? (
-          <div className="p-5 space-y-3" aria-busy="true" aria-label="Loading patients">
-            {Array.from({ length: 5 }).map((_, i) => (
-              <div
-                key={i}
-                className="flex items-center gap-3 p-3 rounded-2xl bg-[#FAFBF9] animate-pulse"
-              >
-                <div className="w-9 h-9 rounded-full bg-[#DCE8E0] shrink-0" />
-                <div className="flex-1 space-y-1.5">
-                  <div className="h-3.5 w-40 bg-[#DCE8E0] rounded" />
-                  <div className="h-2.5 w-24 bg-[#EEF3EF] rounded" />
-                </div>
-                <div className="h-5 w-20 bg-[#DCE8E0] rounded-full" />
-              </div>
-            ))}
-          </div>
+          <TableSkeleton rows={5} label="Loading patients" />
         ) : loadError ? (
           <div className="p-10 text-center space-y-3">
             <AlertTriangle className="w-8 h-8 text-rose-700 mx-auto" aria-hidden="true" />
@@ -438,79 +425,141 @@ export function PatientsView({
             </div>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-[#EEF3EF] bg-[#FAFBF9] text-xs">
-                  <th className="py-3 px-4">{renderSortHeader('Patient ID', 'id')}</th>
-                  <th className="py-3 px-4">{renderSortHeader('Patient', 'fullName')}</th>
-                  <th className="py-3 px-4">{renderSortHeader('Date of Birth', 'dateOfBirth')}</th>
-                  <th className="py-3 px-4 font-semibold text-[#6B7B73]">Contact</th>
-                  <th className="py-3 px-4">{renderSortHeader('Registered', 'registrationDate')}</th>
-                  <th className="py-3 px-4">{renderSortHeader('Status', 'administrativeStatus')}</th>
-                  <th className="py-3 px-4 text-right font-semibold text-[#6B7B73]">Profile</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#EEF3EF] text-sm">
-                {sortedPatients.map((patient) => (
-                  <tr
-                    key={patient.id}
-                    className={`hover:bg-[#F5F9F6] transition-colors ${
-                      selectedDetail?.id === patient.id ? 'bg-[#E9F5EE]/75' : ''
-                    }`}
-                  >
-                    <td
-                      className={`${cellPad} font-mono tabular-nums text-xs font-semibold text-[#0F3D2E] whitespace-nowrap`}
-                    >
-                      {patient.id}
-                    </td>
-                    <td className={`${cellPad} font-semibold text-[#1C2B25]`}>
-                      <div className="flex items-center gap-3">
-                        <EditorialAvatar name={patient.fullName} role="patient" size="sm" />
+          <>
+            {/* Mobile Stacked Patient Cards */}
+            <div className="md:hidden divide-y divide-[#EEF3EF]">
+              {sortedPatients.map((patient) => (
+                <article
+                  key={patient.id}
+                  className={`p-4 space-y-3 ${
+                    selectedDetail?.id === patient.id ? 'bg-[#E9F5EE]/75' : ''
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <EditorialAvatar name={patient.fullName} role="patient" size="sm" />
+                      <div className="min-w-0">
                         <button
                           type="button"
                           onClick={() => handleOpenDrawer(patient.id)}
-                          className="text-left hover:text-[#137A55] hover:underline"
+                          className="text-sm font-bold text-[#1C2B25] hover:text-[#137A55] text-left truncate block"
                         >
                           {patient.fullName}
                         </button>
+                        <div className="text-[11px] font-mono text-[#0F3D2E] tabular-nums">
+                          {patient.id} · DOB {patient.dateOfBirth}
+                        </div>
                       </div>
-                    </td>
-                    <td
-                      className={`${cellPad} font-mono tabular-nums text-xs text-[#6B7B73] whitespace-nowrap`}
+                    </div>
+                    <AdminStatusText status={patient.administrativeStatus} />
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-1 text-xs text-[#6B7B73] bg-[#FAFBF9] rounded-2xl p-3 border border-[#EEF3EF]">
+                    <div className="font-mono tabular-nums text-[#1C2B25]">{patient.contactNumber}</div>
+                    <div className="truncate">{patient.email}</div>
+                    <div className="text-[11px] font-mono">Registered {patient.registrationDate}</div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleOpenDrawer(patient.id)}
+                      className="btn-press flex-1 min-h-[44px] inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-full text-xs font-semibold text-[#0F3D2E] bg-[#EEF3EF] hover:bg-[#DCE8E0]"
+                      aria-label={`Inspect ${patient.fullName} (${patient.id})`}
                     >
-                      {patient.dateOfBirth}
-                    </td>
-                    <td className={`${cellPad} text-xs text-[#6B7B73]`}>
-                      <div className="font-mono tabular-nums text-[#1C2B25]">
-                        {patient.contactNumber}
-                      </div>
-                      <div className="truncate max-w-[190px]">{patient.email}</div>
-                    </td>
-                    <td
-                      className={`${cellPad} font-mono tabular-nums text-xs text-[#6B7B73] whitespace-nowrap`}
-                    >
-                      {patient.registrationDate}
-                    </td>
-                    <td className={cellPad}>
-                      <AdminStatusText status={patient.administrativeStatus} />
-                    </td>
-                    <td className={`${cellPad} text-right`}>
+                      <span>Inspect Chart</span>
+                      <ArrowUpRight className="w-3.5 h-3.5" aria-hidden="true" />
+                    </button>
+                    {canWrite && (
                       <button
                         type="button"
-                        onClick={() => handleOpenDrawer(patient.id)}
-                        className="btn-press inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold text-[#0F3D2E] bg-[#EEF3EF] hover:bg-[#DCE8E0] whitespace-nowrap"
-                        aria-label={`Inspect ${patient.fullName} (${patient.id})`}
+                        onClick={() => onQuickScheduleForPatient(patient.id)}
+                        className="btn-press min-h-[44px] inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-bold text-[#0F3D2E] bg-[#34C38F] hover:bg-[#2bb482]"
                       >
-                        <span>Inspect</span>
-                        <ArrowUpRight className="w-3.5 h-3.5" aria-hidden="true" />
+                        <CalendarPlus className="w-3.5 h-3.5" aria-hidden="true" />
+                        Book
                       </button>
-                    </td>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
+
+            {/* Desktop Table */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b border-[#EEF3EF] bg-[#FAFBF9] text-xs">
+                    <th className="py-3 px-4">{renderSortHeader('Patient ID', 'id')}</th>
+                    <th className="py-3 px-4">{renderSortHeader('Patient', 'fullName')}</th>
+                    <th className="py-3 px-4">{renderSortHeader('Date of Birth', 'dateOfBirth')}</th>
+                    <th className="py-3 px-4 font-semibold text-[#6B7B73]">Contact</th>
+                    <th className="py-3 px-4">{renderSortHeader('Registered', 'registrationDate')}</th>
+                    <th className="py-3 px-4">{renderSortHeader('Status', 'administrativeStatus')}</th>
+                    <th className="py-3 px-4 text-right font-semibold text-[#6B7B73]">Profile</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-[#EEF3EF] text-sm">
+                  {sortedPatients.map((patient) => (
+                    <tr
+                      key={patient.id}
+                      className={`hover:bg-[#F5F9F6] transition-colors ${
+                        selectedDetail?.id === patient.id ? 'bg-[#E9F5EE]/75' : ''
+                      }`}
+                    >
+                      <td
+                        className={`${cellPad} font-mono tabular-nums text-xs font-semibold text-[#0F3D2E] whitespace-nowrap`}
+                      >
+                        {patient.id}
+                      </td>
+                      <td className={`${cellPad} font-semibold text-[#1C2B25]`}>
+                        <div className="flex items-center gap-3">
+                          <EditorialAvatar name={patient.fullName} role="patient" size="sm" />
+                          <button
+                            type="button"
+                            onClick={() => handleOpenDrawer(patient.id)}
+                            className="text-left hover:text-[#137A55] hover:underline"
+                          >
+                            {patient.fullName}
+                          </button>
+                        </div>
+                      </td>
+                      <td
+                        className={`${cellPad} font-mono tabular-nums text-xs text-[#6B7B73] whitespace-nowrap`}
+                      >
+                        {patient.dateOfBirth}
+                      </td>
+                      <td className={`${cellPad} text-xs text-[#6B7B73]`}>
+                        <div className="font-mono tabular-nums text-[#1C2B25]">
+                          {patient.contactNumber}
+                        </div>
+                        <div className="truncate max-w-[190px]">{patient.email}</div>
+                      </td>
+                      <td
+                        className={`${cellPad} font-mono tabular-nums text-xs text-[#6B7B73] whitespace-nowrap`}
+                      >
+                        {patient.registrationDate}
+                      </td>
+                      <td className={cellPad}>
+                        <AdminStatusText status={patient.administrativeStatus} />
+                      </td>
+                      <td className={`${cellPad} text-right`}>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenDrawer(patient.id)}
+                          className="btn-press inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold text-[#0F3D2E] bg-[#EEF3EF] hover:bg-[#DCE8E0] whitespace-nowrap"
+                          aria-label={`Inspect ${patient.fullName} (${patient.id})`}
+                        >
+                          <span>Inspect</span>
+                          <ArrowUpRight className="w-3.5 h-3.5" aria-hidden="true" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </div>
 

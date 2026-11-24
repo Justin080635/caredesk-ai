@@ -29,6 +29,7 @@ import {
   DepartmentLoadChart,
   StatusDonutChart,
 } from './AnalyticsCharts';
+import { ChartSkeleton } from './Skeletons';
 import { AppointmentStatusText } from './StatusText';
 
 interface ReportsApiViewProps {
@@ -145,16 +146,7 @@ export function ReportsApiView({
   };
 
   if (loading && !daily) {
-    return (
-      <div className="space-y-6" aria-busy="true" aria-label="Loading operational reports">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="h-28 card-surface rounded-[22px] animate-pulse" />
-          ))}
-        </div>
-        <div className="h-80 card-surface rounded-[24px] animate-pulse" />
-      </div>
-    );
+    return <ChartSkeleton label="Loading operational reports" />;
   }
 
   if (!daily || !overview) {
@@ -241,9 +233,9 @@ export function ReportsApiView({
 
       {/* Large Analytical Chart Cards */}
       <section className="grid grid-cols-1 xl:grid-cols-12 gap-5">
-        <div className="xl:col-span-7 card-surface rounded-[24px] p-6 space-y-5">
+        <div className="xl:col-span-7 min-w-0 card-surface rounded-[24px] p-5 sm:p-6 space-y-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
+            <div className="min-w-0">
               <h2 className="text-base font-bold text-[#1C2B25]">
                 Daily Appointment Activity &amp; Confirmation Pace
               </h2>
@@ -260,7 +252,7 @@ export function ReportsApiView({
                 type="date"
                 value={selectedDate}
                 onChange={(e) => setSelectedDate(e.target.value)}
-                className="px-3 py-1.5 text-xs font-mono border border-[#DCE8E0] rounded-full bg-[#FAFBF9] focus:outline-none focus:border-[#34C38F]"
+                className="min-h-[40px] sm:min-h-0 px-3 py-1.5 text-xs font-mono border border-[#DCE8E0] rounded-full bg-[#FAFBF9] focus:outline-none focus:border-[#34C38F]"
               />
             </div>
           </div>
@@ -273,15 +265,15 @@ export function ReportsApiView({
           />
         </div>
 
-        <div className="xl:col-span-5 card-surface rounded-[24px] p-6 space-y-5 flex flex-col justify-between">
+        <div className="xl:col-span-5 min-w-0 card-surface rounded-[24px] p-5 sm:p-6 space-y-5 flex flex-col justify-between">
           <div className="flex items-center justify-between gap-3">
-            <div>
+            <div className="min-w-0">
               <h2 className="text-base font-bold text-[#1C2B25]">Status Distribution</h2>
               <p className="text-xs text-[#6B7B73] mt-0.5">
                 Share of bookings across current reporting window
               </p>
             </div>
-            <span className="px-3 py-1 rounded-full bg-[#EEF3EF] text-[#0F3D2E] text-[11px] font-semibold font-mono tabular-nums">
+            <span className="px-3 py-1 rounded-full bg-[#EEF3EF] text-[#0F3D2E] text-[11px] font-semibold font-mono tabular-nums shrink-0">
               {overview.totalAppointmentsInWindow} total
             </span>
           </div>
@@ -295,7 +287,7 @@ export function ReportsApiView({
             <button
               type="button"
               onClick={handleDownloadCsv}
-              className="btn-press inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-[#0F3D2E] bg-[#E3F7EF] hover:bg-[#D0EFE3] rounded-full whitespace-nowrap"
+              className="btn-press inline-flex items-center gap-1.5 min-h-[44px] sm:min-h-0 px-4 py-2 text-xs font-semibold text-[#0F3D2E] bg-[#E3F7EF] hover:bg-[#D0EFE3] rounded-full whitespace-nowrap"
             >
               <FileSpreadsheet className="w-3.5 h-3.5 text-[#137A55]" aria-hidden="true" />
               Export CSV
@@ -303,7 +295,7 @@ export function ReportsApiView({
             <button
               type="button"
               onClick={handleDownloadJson}
-              className="btn-press inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-[#1C2B25] bg-[#FAFBF9] hover:bg-[#EEF3EF] border border-[#DCE8E0] rounded-full whitespace-nowrap"
+              className="btn-press inline-flex items-center gap-1.5 min-h-[44px] sm:min-h-0 px-4 py-2 text-xs font-semibold text-[#1C2B25] bg-[#FAFBF9] hover:bg-[#EEF3EF] border border-[#DCE8E0] rounded-full whitespace-nowrap"
             >
               <Download className="w-3.5 h-3.5 text-[#0F3D2E]" aria-hidden="true" />
               Export JSON
@@ -331,7 +323,7 @@ export function ReportsApiView({
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          <div className="lg:col-span-5 space-y-3">
+          <div className="lg:col-span-5 min-w-0 space-y-3">
             <h3 className="text-sm font-semibold text-[#1C2B25]">
               Daily Status Breakdown ({daily.date})
             </h3>
@@ -359,7 +351,7 @@ export function ReportsApiView({
             </div>
           </div>
 
-          <div className="lg:col-span-7 space-y-3 lg:pl-6 lg:border-l lg:border-[#EEF3EF]">
+          <div className="lg:col-span-7 min-w-0 space-y-3 lg:pl-6 lg:border-l lg:border-[#EEF3EF]">
             <div className="flex items-center justify-between gap-2">
               <h3 className="text-sm font-semibold text-[#1C2B25]">
                 Department Volume &amp; Confirmation Rate
@@ -373,13 +365,13 @@ export function ReportsApiView({
 
       {/* Operational Intelligence & Explainable Reports */}
       {explainable && (
-        <section className="card-surface rounded-[24px] p-6 space-y-6">
+        <section className="card-surface rounded-[24px] p-5 sm:p-6 space-y-6">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-[#EEF3EF] pb-4">
-            <div>
+            <div className="min-w-0">
               <h2 className="text-base font-bold text-[#1C2B25]">
                 Operational Intelligence &amp; Explainable Reports
               </h2>
-              <p className="text-xs text-[#6B7B73] mt-0.5">
+              <p className="text-xs text-[#6B7B73] mt-0.5 break-words">
                 Period <span className="font-mono">{explainable.periodStart}</span> to{' '}
                 <span className="font-mono">{explainable.periodEnd}</span> vs prior baseline{' '}
                 <span className="font-mono">
@@ -388,31 +380,35 @@ export function ReportsApiView({
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <label htmlFor="explain-period-start" className="text-xs text-[#6B7B73]">
-                From
-              </label>
-              <input
-                id="explain-period-start"
-                type="date"
-                value={periodStart}
-                onChange={(e) => setPeriodStart(e.target.value)}
-                className="px-3 py-1.5 text-xs font-mono border border-[#DCE8E0] rounded-full bg-[#FAFBF9]"
-              />
-              <label htmlFor="explain-period-end" className="text-xs text-[#6B7B73]">
-                To
-              </label>
-              <input
-                id="explain-period-end"
-                type="date"
-                value={periodEnd}
-                onChange={(e) => setPeriodEnd(e.target.value)}
-                className="px-3 py-1.5 text-xs font-mono border border-[#DCE8E0] rounded-full bg-[#FAFBF9]"
-              />
+              <div className="flex items-center gap-1.5">
+                <label htmlFor="explain-period-start" className="text-xs text-[#6B7B73]">
+                  From
+                </label>
+                <input
+                  id="explain-period-start"
+                  type="date"
+                  value={periodStart}
+                  onChange={(e) => setPeriodStart(e.target.value)}
+                  className="min-h-[40px] sm:min-h-0 px-3 py-1.5 text-xs font-mono border border-[#DCE8E0] rounded-full bg-[#FAFBF9]"
+                />
+              </div>
+              <div className="flex items-center gap-1.5">
+                <label htmlFor="explain-period-end" className="text-xs text-[#6B7B73]">
+                  To
+                </label>
+                <input
+                  id="explain-period-end"
+                  type="date"
+                  value={periodEnd}
+                  onChange={(e) => setPeriodEnd(e.target.value)}
+                  className="min-h-[40px] sm:min-h-0 px-3 py-1.5 text-xs font-mono border border-[#DCE8E0] rounded-full bg-[#FAFBF9]"
+                />
+              </div>
               <button
                 type="button"
                 disabled={loadingExplainable}
                 onClick={handleReloadExplainable}
-                className="btn-press inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold text-[#0F3D2E] bg-[#E3F7EF] hover:bg-[#D0EFE3] rounded-full disabled:opacity-50 whitespace-nowrap shrink-0"
+                className="btn-press inline-flex items-center gap-1.5 min-h-[44px] sm:min-h-0 px-4 py-1.5 text-xs font-semibold text-[#0F3D2E] bg-[#E3F7EF] hover:bg-[#D0EFE3] rounded-full disabled:opacity-50 whitespace-nowrap shrink-0"
               >
                 <RefreshCw
                   className={`w-3.5 h-3.5 text-[#137A55] ${loadingExplainable ? 'animate-spin' : ''}`}
@@ -521,7 +517,7 @@ export function ReportsApiView({
 
           {explainable.doctorUtilization.length > 0 && (
             <div className="border border-[#DCE8E0] rounded-[20px] overflow-hidden">
-              <div className="px-5 py-3.5 bg-[#FAFBF9] border-b border-[#DCE8E0] flex items-center justify-between">
+              <div className="px-5 py-3.5 bg-[#FAFBF9] border-b border-[#DCE8E0] flex items-center justify-between gap-2">
                 <h3 className="text-xs font-semibold text-[#1C2B25]">
                   Clinician Utilization &amp; Capacity Breakdown
                 </h3>
@@ -529,7 +525,40 @@ export function ReportsApiView({
                   {explainable.doctorUtilization.length} clinicians
                 </span>
               </div>
-              <div className="overflow-x-auto">
+              <div className="md:hidden divide-y divide-[#EEF3EF]">
+                {explainable.doctorUtilization.map((doc) => (
+                  <div key={doc.staffId} className="p-4 space-y-2 bg-white text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="font-semibold text-[#1C2B25] truncate">{doc.doctorName}</div>
+                        <div className="text-[11px] text-[#6B7B73]">{doc.department}</div>
+                      </div>
+                      <span className="font-mono font-bold text-[#0F3D2E] bg-[#E3F7EF] px-2.5 py-0.5 rounded-full shrink-0">
+                        {doc.utilizationRate}%
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-4 gap-2 text-[11px] font-mono bg-[#FAFBF9] p-2 rounded-xl">
+                      <div>
+                        <span className="text-[#6B7B73] block">Sched</span>
+                        <span className="font-semibold text-[#1C2B25]">{doc.scheduledAppointments}</span>
+                      </div>
+                      <div>
+                        <span className="text-[#6B7B73] block">Done</span>
+                        <span className="font-semibold text-[#137A55]">{doc.completedAppointments}</span>
+                      </div>
+                      <div>
+                        <span className="text-[#6B7B73] block">Missed</span>
+                        <span className="font-semibold text-rose-600">{doc.missedAppointments}</span>
+                      </div>
+                      <div>
+                        <span className="text-[#6B7B73] block">Slots</span>
+                        <span className="font-semibold text-[#6B7B73]">{doc.capacitySlotsInPeriod}</span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="hidden md:block overflow-x-auto">
                 <table className="w-full text-left border-collapse text-xs">
                   <thead>
                     <tr className="border-b border-[#DCE8E0] text-[#6B7B73] bg-white">
@@ -574,7 +603,7 @@ export function ReportsApiView({
 
       {/* Missed Appointments 7-Day Table */}
       <section className="card-surface rounded-[24px] overflow-hidden">
-        <div className="px-6 py-4 border-b border-[#EEF3EF] flex items-center justify-between gap-3">
+        <div className="px-5 sm:px-6 py-4 border-b border-[#EEF3EF] flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-base font-bold text-[#1C2B25]">
               Missed Appointments (Last 7 Days)
@@ -583,7 +612,7 @@ export function ReportsApiView({
               Patients flagged for rescheduling outreach and follow-up tracking
             </p>
           </div>
-          <span className="px-3 py-1 rounded-full bg-[#EEF3EF] text-[#0F3D2E] text-xs font-mono tabular-nums">
+          <span className="px-3 py-1 rounded-full bg-[#EEF3EF] text-[#0F3D2E] text-xs font-mono tabular-nums shrink-0">
             {overview.missedLastSevenDaysCount} record
             {overview.missedLastSevenDaysCount === 1 ? '' : 's'}
           </span>
@@ -594,68 +623,111 @@ export function ReportsApiView({
             No missed appointments recorded in the last seven days.
           </p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[540px] text-left border-collapse text-xs">
-              <thead>
-                <tr className="border-b border-[#DCE8E0] bg-[#FAFBF9] text-[#6B7B73]">
-                  <th className="py-2.5 px-6 whitespace-nowrap">Appointment</th>
-                  <th className="py-2.5 px-4 whitespace-nowrap">Date · Time</th>
-                  <th className="py-2.5 px-4">Patient</th>
-                  <th className="py-2.5 px-4">Department · Clinician</th>
-                  <th className="py-2.5 px-6 whitespace-nowrap">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#EEF3EF]">
-                {overview.missedLastSevenDays.map((m) => (
-                  <tr key={m.id} className="hover:bg-[#FAFBF9] transition-colors">
-                    <td className="py-2.5 px-6 font-mono font-semibold text-[#0F3D2E] whitespace-nowrap">
-                      {m.id}
-                    </td>
-                    <td className="py-2.5 px-4 font-mono tabular-nums text-[#43564D] whitespace-nowrap">
-                      {m.appointmentDate} {m.appointmentTime}
-                    </td>
-                    <td className="py-2.5 px-4">
-                      <span className="font-semibold text-[#1C2B25]">{m.patientName}</span>
-                      <span className="font-mono text-[#6B7B73]"> · {m.patientId}</span>
-                    </td>
-                    <td className="py-2.5 px-4 text-[#6B7B73] whitespace-nowrap">
+          <>
+            <div className="md:hidden divide-y divide-[#EEF3EF]">
+              {overview.missedLastSevenDays.map((m) => (
+                <article key={m.id} className="p-4 space-y-2 bg-white text-xs">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="font-semibold text-[#1C2B25] truncate">{m.patientName}</div>
+                      <div className="text-[11px] font-mono text-[#6B7B73]">
+                        {m.id} · {m.patientId}
+                      </div>
+                    </div>
+                    <AppointmentStatusText status={m.status} />
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-[#6B7B73]">
+                    <span className="font-mono text-[#1C2B25]">
+                      {m.appointmentDate} · {m.appointmentTime}
+                    </span>
+                    <span className="truncate">
                       {m.department} · {m.clinician}
-                    </td>
-                    <td className="py-2.5 px-6 whitespace-nowrap">
-                      <AppointmentStatusText status={m.status} />
-                    </td>
+                    </span>
+                  </div>
+                </article>
+              ))}
+            </div>
+
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="border-b border-[#DCE8E0] bg-[#FAFBF9] text-[#6B7B73]">
+                    <th className="py-2.5 px-6 whitespace-nowrap">Appointment</th>
+                    <th className="py-2.5 px-4 whitespace-nowrap">Date · Time</th>
+                    <th className="py-2.5 px-4">Patient</th>
+                    <th className="py-2.5 px-4">Department · Clinician</th>
+                    <th className="py-2.5 px-6 whitespace-nowrap">Status</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-[#EEF3EF]">
+                  {overview.missedLastSevenDays.map((m) => (
+                    <tr key={m.id} className="hover:bg-[#FAFBF9] transition-colors">
+                      <td className="py-2.5 px-6 font-mono font-semibold text-[#0F3D2E] whitespace-nowrap">
+                        {m.id}
+                      </td>
+                      <td className="py-2.5 px-4 font-mono tabular-nums text-[#43564D] whitespace-nowrap">
+                        {m.appointmentDate} {m.appointmentTime}
+                      </td>
+                      <td className="py-2.5 px-4">
+                        <span className="font-semibold text-[#1C2B25]">{m.patientName}</span>
+                        <span className="font-mono text-[#6B7B73]"> · {m.patientId}</span>
+                      </td>
+                      <td className="py-2.5 px-4 text-[#6B7B73] whitespace-nowrap">
+                        {m.department} · {m.clinician}
+                      </td>
+                      <td className="py-2.5 px-6 whitespace-nowrap">
+                        <AppointmentStatusText status={m.status} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </section>
 
       {/* REST API Reference */}
       <section className="card-surface rounded-[24px] overflow-hidden">
-        <div className="px-6 py-4 border-b border-[#EEF3EF] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
+        <div className="px-5 sm:px-6 py-4 border-b border-[#EEF3EF] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
             <div className="w-9 h-9 rounded-2xl bg-[#EEF3EF] text-[#0F3D2E] flex items-center justify-center shrink-0">
               <Code2 className="w-4 h-4" aria-hidden="true" />
             </div>
-            <div>
+            <div className="min-w-0">
               <h2 className="text-base font-bold text-[#1C2B25]">
                 REST API Reference &amp; Synapse Readiness
               </h2>
-              <p className="text-xs text-[#6B7B73]">
+              <p className="text-xs text-[#6B7B73] break-words">
                 OpenAPI {docs?.openapi ?? '3.0.3'} served live at{' '}
                 <code className="font-mono text-[#1C2B25]">GET /api/docs</code>
               </p>
             </div>
           </div>
-          <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#E3F7EF] text-xs font-semibold text-[#137A55] shrink-0">
+          <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#E3F7EF] text-xs font-semibold text-[#137A55] shrink-0 self-start sm:self-auto">
             <ShieldCheck className="w-3.5 h-3.5" aria-hidden="true" />
             <span>Synapse MCP Ready</span>
           </div>
         </div>
 
-        <div className="overflow-x-auto">
+        <div className="md:hidden divide-y divide-[#EEF3EF]">
+          {docs &&
+            Object.entries(docs.paths).flatMap(([routePath, methods]) =>
+              Object.entries(methods).map(([method, op]) => (
+                <div key={`${method}-${routePath}-mob`} className="p-4 space-y-1 bg-white text-xs">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="font-mono font-bold uppercase text-[#137A55] shrink-0">
+                      {method}
+                    </span>
+                    <span className="font-mono text-[#1C2B25] break-all">/api{routePath}</span>
+                  </div>
+                  <p className="text-[#6B7B73]">{op.summary}</p>
+                </div>
+              ))
+            )}
+        </div>
+
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="border-b border-[#DCE8E0] bg-[#FAFBF9] text-[#6B7B73]">

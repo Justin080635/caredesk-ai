@@ -19,6 +19,7 @@ import type {
 import { formatIsoDate, groupFollowUpsByPriority } from '../utils/workspaceMath';
 import { ClinicEmptyIllustration, EditorialAvatar } from './ClinicIllustrations';
 import { ModalShell } from './ModalShell';
+import { CardGridSkeleton } from './Skeletons';
 import { FollowUpStatusText, PriorityText } from './StatusText';
 
 interface FollowUpsViewProps {
@@ -384,7 +385,7 @@ export function FollowUpsView({
       <div className="card-surface rounded-[22px] p-4 flex flex-col md:flex-row md:items-center justify-between gap-3.5">
         <div className="flex flex-wrap items-center gap-2.5">
           <div
-            className="flex items-center gap-1 p-1 bg-[#EEF3EF] border border-[#DCE8E0] rounded-full overflow-x-auto"
+            className="flex flex-wrap sm:flex-nowrap items-center gap-1 p-1 bg-[#EEF3EF] border border-[#DCE8E0] rounded-2xl sm:rounded-full max-w-full"
             role="group"
             aria-label="Filter follow-ups by queue view"
           >
@@ -398,7 +399,7 @@ export function FollowUpsView({
                 key={tab.id}
                 type="button"
                 onClick={() => setViewMode(tab.id as typeof viewMode)}
-                className={`px-3.5 py-1.5 text-xs font-semibold rounded-full transition-colors whitespace-nowrap shrink-0 ${
+                className={`min-h-[38px] sm:min-h-0 px-3.5 py-1.5 text-xs font-semibold rounded-full transition-colors whitespace-nowrap shrink-0 ${
                   viewMode === tab.id
                     ? 'bg-[#0F3D2E] text-white shadow-xs'
                     : 'text-[#6B7B73] hover:text-[#1C2B25]'
@@ -413,7 +414,7 @@ export function FollowUpsView({
             aria-label="Filter by priority"
             value={priorityFilter}
             onChange={(e) => setPriorityFilter(e.target.value)}
-            className="px-3.5 py-2 text-xs font-medium border border-[#DCE8E0] rounded-full bg-[#FAFBF9]"
+            className="w-full sm:w-auto min-h-[44px] sm:min-h-0 px-3.5 py-2 text-xs font-medium border border-[#DCE8E0] rounded-full bg-[#FAFBF9]"
           >
             <option value="All">All Priorities</option>
             <option value="High">High Priority</option>
@@ -425,7 +426,7 @@ export function FollowUpsView({
             aria-label="Filter by category"
             value={typeFilter}
             onChange={(e) => setTypeFilter(e.target.value)}
-            className="px-3.5 py-2 text-xs font-medium border border-[#DCE8E0] rounded-full bg-[#FAFBF9]"
+            className="w-full sm:w-auto min-h-[44px] sm:min-h-0 px-3.5 py-2 text-xs font-medium border border-[#DCE8E0] rounded-full bg-[#FAFBF9]"
           >
             <option value="All">All Categories</option>
             {FOLLOWUP_TYPES.map((ft) => (
@@ -443,7 +444,7 @@ export function FollowUpsView({
               setFormError(null);
               setShowCreateModal(true);
             }}
-            className="btn-press inline-flex items-center gap-2 px-4 py-2 text-xs sm:text-sm font-bold text-[#0F3D2E] bg-[#34C38F] hover:bg-[#2bb482] rounded-full transition-colors whitespace-nowrap shrink-0"
+            className="btn-press inline-flex items-center justify-center gap-2 min-h-[44px] sm:min-h-0 px-4 py-2 text-xs sm:text-sm font-bold text-[#0F3D2E] bg-[#34C38F] hover:bg-[#2bb482] rounded-full transition-colors whitespace-nowrap shrink-0"
           >
             <Plus className="w-4 h-4" aria-hidden="true" />
             New Follow-up
@@ -453,11 +454,11 @@ export function FollowUpsView({
 
       {/* Grouped Priority Task Cards */}
       {loading ? (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5" aria-label="Loading follow-up tasks">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="h-64 card-surface rounded-[24px] animate-pulse" />
-          ))}
-        </div>
+        <CardGridSkeleton
+          cards={3}
+          columnsClass="grid-cols-1 md:grid-cols-2 xl:grid-cols-3"
+          label="Loading follow-up tasks"
+        />
       ) : tasks.length === 0 ? (
         <div className="card-surface rounded-[24px] p-10 text-center space-y-3">
           <ClinicEmptyIllustration variant="followups" />
@@ -467,7 +468,7 @@ export function FollowUpsView({
               Switch queue views, reset priority filters, or create a new outreach item.
             </p>
           </div>
-          <div className="flex items-center justify-center gap-2 pt-1">
+          <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
             {(viewMode !== 'all' || priorityFilter !== 'All') && (
               <button
                 type="button"
@@ -475,7 +476,7 @@ export function FollowUpsView({
                   setViewMode('all');
                   setPriorityFilter('All');
                 }}
-                className="btn-press px-4 py-2 text-xs font-semibold text-[#1C2B25] bg-[#FAFBF9] border border-[#DCE8E0] rounded-full"
+                className="btn-press min-h-[44px] sm:min-h-0 px-4 py-2 text-xs font-semibold text-[#1C2B25] bg-[#FAFBF9] border border-[#DCE8E0] rounded-full"
               >
                 View All Tasks
               </button>
@@ -487,7 +488,7 @@ export function FollowUpsView({
                   setFormError(null);
                   setShowCreateModal(true);
                 }}
-                className="btn-press px-4 py-2 text-xs font-bold text-[#0F3D2E] bg-[#34C38F] rounded-full"
+                className="btn-press min-h-[44px] sm:min-h-0 px-4 py-2 text-xs font-bold text-[#0F3D2E] bg-[#34C38F] rounded-full"
               >
                 New Follow-up
               </button>
@@ -497,7 +498,7 @@ export function FollowUpsView({
       ) : (
         <div
           className={`grid gap-5 items-start ${
-            visibleLanes.length === 1 ? 'grid-cols-1' : 'grid-cols-1 lg:grid-cols-3'
+            visibleLanes.length === 1 ? 'grid-cols-1' : 'grid-cols-1 md:grid-cols-2 xl:grid-cols-3'
           }`}
         >
           {visibleLanes.map((lane) => {
@@ -629,7 +630,7 @@ export function FollowUpsView({
                                   type="button"
                                   disabled={isBusy}
                                   onClick={() => handleStatusChange(task.id, 'Completed')}
-                                  className="btn-press inline-flex items-center gap-1 px-3 py-1 rounded-full text-[11px] font-bold text-[#0F3D2E] bg-[#34C38F] hover:bg-[#2bb482] disabled:opacity-50"
+                                  className="btn-press inline-flex items-center gap-1 min-h-[44px] sm:min-h-0 px-3.5 sm:px-3 py-1 rounded-full text-[11px] font-bold text-[#0F3D2E] bg-[#34C38F] hover:bg-[#2bb482] disabled:opacity-50"
                                 >
                                   <Check className="w-3 h-3" aria-hidden="true" />
                                   Complete
@@ -640,7 +641,7 @@ export function FollowUpsView({
                                   type="button"
                                   disabled={isBusy}
                                   onClick={() => handleStatusChange(task.id, 'Scheduled')}
-                                  className="btn-press px-3 py-1 rounded-full text-[11px] font-semibold text-[#0F3D2E] bg-white border border-[#DCE8E0] hover:bg-[#EEF3EF] disabled:opacity-50"
+                                  className="btn-press min-h-[44px] sm:min-h-0 px-3.5 sm:px-3 py-1 rounded-full text-[11px] font-semibold text-[#0F3D2E] bg-white border border-[#DCE8E0] hover:bg-[#EEF3EF] disabled:opacity-50"
                                 >
                                   Schedule
                                 </button>
@@ -650,7 +651,7 @@ export function FollowUpsView({
                                   type="button"
                                   disabled={isBusy}
                                   onClick={() => handleStatusChange(task.id, 'Pending')}
-                                  className="btn-press inline-flex items-center gap-1 px-3 py-1 rounded-full text-[11px] font-semibold text-[#0F3D2E] bg-white border border-[#DCE8E0] hover:bg-[#EEF3EF] disabled:opacity-50"
+                                  className="btn-press inline-flex items-center gap-1 min-h-[44px] sm:min-h-0 px-3.5 sm:px-3 py-1 rounded-full text-[11px] font-semibold text-[#0F3D2E] bg-white border border-[#DCE8E0] hover:bg-[#EEF3EF] disabled:opacity-50"
                                 >
                                   <RotateCcw className="w-3 h-3" aria-hidden="true" />
                                   Reopen
@@ -661,7 +662,7 @@ export function FollowUpsView({
                                 disabled={isBusy}
                                 onClick={() => openEditModal(task)}
                                 aria-label={`Edit follow-up ${task.id}`}
-                                className="btn-press inline-flex items-center gap-1 px-3 py-1 rounded-full text-[11px] font-semibold text-[#6B7B73] hover:text-[#1C2B25] bg-white border border-[#DCE8E0] disabled:opacity-50"
+                                className="btn-press inline-flex items-center gap-1 min-h-[44px] sm:min-h-0 px-3.5 sm:px-3 py-1 rounded-full text-[11px] font-semibold text-[#6B7B73] hover:text-[#1C2B25] bg-white border border-[#DCE8E0] disabled:opacity-50"
                               >
                                 <Pencil className="w-3 h-3" aria-hidden="true" />
                                 Edit
@@ -671,7 +672,7 @@ export function FollowUpsView({
                                   type="button"
                                   disabled={isBusy}
                                   onClick={() => handleStatusChange(task.id, 'Cancelled')}
-                                  className="btn-press ml-auto px-2.5 py-1 rounded-full text-[11px] font-medium text-[#6B7B73] hover:text-rose-700 disabled:opacity-50"
+                                  className="btn-press ml-auto min-h-[44px] sm:min-h-0 px-3 sm:px-2.5 py-1 rounded-full text-[11px] font-medium text-[#6B7B73] hover:text-rose-700 disabled:opacity-50"
                                 >
                                   Cancel
                                 </button>

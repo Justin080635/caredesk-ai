@@ -11,6 +11,8 @@ import {
   FileBarChart,
   LogOut,
   MoreHorizontal,
+  PanelLeftClose,
+  PanelLeftOpen,
   Search,
   Settings,
   ShieldCheck,
@@ -58,6 +60,7 @@ import { PatientWorkspace } from './components/PatientWorkspace';
 import { ReportsApiView } from './components/ReportsApiView';
 import { RightRail } from './components/RightRail';
 import { SettingsView } from './components/SettingsView';
+import { SignatureLoader } from './components/SignatureLoader';
 import { StaffProfilePage } from './components/StaffProfilePage';
 import { StaffView } from './components/StaffView';
 import type {
@@ -275,6 +278,9 @@ export default function App() {
   const [avatarLoadError, setAvatarLoadError] = useState(false);
   const [pendingAssistantPrompt, setPendingAssistantPrompt] = useState<string | null>(null);
   const [staffDirectory, setStaffDirectory] = useState<StaffMember[]>([]);
+  const [routeTransitioning, setRouteTransitioning] = useState(false);
+  const [initialOpsReady, setInitialOpsReady] = useState(false);
+  const routeRafRef = useRef<number | null>(null);
 
   // Right Rail shared synchronization state (for Dashboard & Appointments)
   const [focusDate, setFocusDate] = useState<string>(getLocalTodayIso);
@@ -426,6 +432,11 @@ export default function App() {
 
   const navigateToRoute = useCallback(
     (route: RouteState, options?: { preserveFilters?: boolean }) => {
+      const isMajorRouteSwitch =
+        route.tab !== activeTab ||
+        route.patientId !== routePatientId ||
+        route.staffId !== routeStaffId;
+
       if (!options?.preserveFilters) {
         setPatientsStatusFilter('All');
         setAppointmentsStatusFilter('All');
@@ -433,6 +444,20 @@ export default function App() {
         setSelectedAppointmentIdForDetail(null);
         setFollowupsViewMode('pending');
       }
+
+      if (isMajorRouteSwitch) {
+        if (routeRafRef.current !== null) {
+          window.cancelAnimationFrame(routeRafRef.current);
+        }
+        setRouteTransitioning(true);
+        routeRafRef.current = window.requestAnimationFrame(() => {
+          routeRafRef.current = window.requestAnimationFrame(() => {
+            setRouteTransitioning(false);
+            routeRafRef.current = null;
+          });
+        });
+      }
+
       setActiveTab(route.tab);
       setRoutePatientId(route.patientId);
       setRouteStaffId(route.staffId);
@@ -444,7 +469,7 @@ export default function App() {
         window.history.pushState(route, '', targetPath);
       }
     },
-    []
+    [activeTab, routePatientId, routeStaffId]
   );
 
   const navigateToTab = useCallback(
@@ -453,6 +478,14 @@ export default function App() {
     },
     [navigateToRoute]
   );
+
+  useEffect(() => {
+    return () => {
+      if (routeRafRef.current !== null) {
+        window.cancelAnimationFrame(routeRafRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const handlePopState = () => {
@@ -476,6 +509,7 @@ export default function App() {
       activeRole === 'Patient' ||
       activeRole === 'Doctor'
     ) {
+      setInitialOpsReady(true);
       return;
     }
     let cancelled = false;
@@ -497,6 +531,10 @@ export default function App() {
         }
       } catch {
         // Non-blocking alert refresh
+      } finally {
+        if (!cancelled) {
+          setInitialOpsReady(true);
+        }
       }
     }
     loadOperationalAlerts();
@@ -744,21 +782,28 @@ export default function App() {
     unreadNotificationsCount +
     pendingVerificationsCount;
 
+  const isAdminSessionActive = Boolean(
+    firebaseUser &&
+      accountSession &&
+      !accountSession.needsOnboarding &&
+      accountSession.activeClinic &&
+      accountSession.activeMembership?.role !== 'Doctor' &&
+      accountSession.activeMembership?.role !== 'Patient'
+  );
+  const bootLoaderActive = authBooting || (isAdminSessionActive && !initialOpsReady);
+  const showSignatureLoader = bootLoaderActive || routeTransitioning;
+
   if (authBooting) {
     return (
-      <div className="min-h-screen bg-[#0F3D2E] text-emerald-50 flex flex-col items-center justify-center p-6">
-        <CareDeskLogoMark className="w-12 h-12 mb-4 shadow-sm" />
-        <div className="text-base font-bold text-white tracking-tight">CareDesk AI</div>
-        <p className="text-xs text-emerald-200/75 mt-1">
-          Verifying clinic credentials and workspace boundary...
-        </p>
+      <div className="min-h-dvh bg-[#0F3D2E]">
+        <SignatureLoader active variant="boot" />
       </div>
     );
   }
 
   if (firebaseUser && authSyncError && !accountSession) {
     return (
-      <div className="min-h-screen bg-[#EEF3EF] text-[#1C2B25] flex items-center justify-center p-6">
+      <div className="min-h-dvh bg-[#EEF3EF] text-[#1C2B25] flex items-center justify-center p-6">
         <div className="w-full max-w-md bg-white border border-[#DCE8E0] rounded-[24px] p-6 space-y-4 shadow-sm">
           <div className="flex items-center gap-2.5 text-rose-700 font-semibold text-sm">
             <AlertTriangle className="w-5 h-5 shrink-0" aria-hidden="true" />
@@ -797,11 +842,14 @@ export default function App() {
 
   if (!firebaseUser || !accountSession) {
     return (
-      <AuthView
-        onRegistrationMetadata={(meta) => {
-          registrationMetaRef.current = meta;
-        }}
-      />
+      <>
+        <SignatureLoader active={false} variant="boot" />
+        <AuthView
+          onRegistrationMetadata={(meta) => {
+            registrationMetaRef.current = meta;
+          }}
+        />
+      </>
     );
   }
 
@@ -948,14 +996,19 @@ export default function App() {
     );
 
   return (
-    <div className="min-h-screen bg-[#EEF3EF] text-[#1C2B25] p-2.5 sm:p-4 lg:p-6 pb-20 lg:pb-6">
-      {/* Main Floating Rounded Application Container */}
-      <div className="shell-frame max-w-[1620px] mx-auto min-h-[calc(100vh-3rem)] p-3 sm:p-4 lg:p-5 flex gap-4 lg:gap-5 relative">
-        {/* 1. Floating Inset Forest-Green Pill Sidebar (Desktop) */}
+    <div className="w-full min-h-dvh lg:h-dvh lg:overflow-hidden bg-[#EEF3EF] text-[#1C2B25] p-0 lg:p-2.5 pb-[76px] lg:pb-2.5">
+      <SignatureLoader
+        active={showSignatureLoader}
+        variant={bootLoaderActive ? 'boot' : 'route'}
+      />
+
+      {/* Full-Viewport Application Shell */}
+      <div className="shell-frame w-full min-h-dvh lg:min-h-0 lg:h-full lg:overflow-hidden rounded-none lg:rounded-[24px] p-3 sm:p-4 lg:p-4 flex gap-3 lg:gap-4 relative">
+        {/* 1. Full-Height Forest-Green Sidebar (Desktop) */}
         <aside
           aria-label="Primary Clinic Navigation"
-          className={`hidden lg:flex lg:flex-col lg:justify-between shrink-0 z-30 rounded-[32px] bg-[#0F3D2E] text-emerald-50 py-5 px-3 sticky top-5 h-[calc(100vh-5.5rem)] max-h-[880px] shadow-md transition-[width] duration-200 ${
-            sidebarCollapsed ? 'w-[74px] items-center' : 'w-[208px] items-stretch'
+          className={`hidden lg:flex lg:flex-col lg:justify-between shrink-0 z-30 rounded-[28px] bg-[#0F3D2E] text-emerald-50 py-4 px-3 h-full shadow-md transition-[width] duration-200 ${
+            sidebarCollapsed ? 'w-[74px] items-center' : 'w-[216px] items-stretch'
           }`}
         >
           {/* Top Brand Mark */}
@@ -986,7 +1039,7 @@ export default function App() {
           {/* Center Main Icons */}
           <nav
             aria-label="Primary Sections"
-            className={`flex-1 flex flex-col justify-center gap-2 my-4 ${
+            className={`flex-1 flex flex-col justify-center gap-2 my-4 overflow-y-auto overflow-x-hidden ${
               sidebarCollapsed ? 'items-center' : 'items-stretch'
             }`}
           >
@@ -1025,12 +1078,36 @@ export default function App() {
             })}
           </nav>
 
-          {/* Bottom Pinned: Settings & Logout */}
+          {/* Bottom Pinned: Expand/Collapse, Settings & Logout */}
           <div
-            className={`flex flex-col gap-2 pt-3 border-t border-white/10 ${
+            className={`flex flex-col gap-1.5 pt-3 border-t border-white/10 ${
               sidebarCollapsed ? 'items-center' : 'items-stretch'
             }`}
           >
+            <button
+              type="button"
+              onClick={() => setSidebarCollapsed((c) => !c)}
+              aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              className={`group relative btn-press flex items-center ${
+                sidebarCollapsed
+                  ? 'w-11 h-11 justify-center'
+                  : 'w-full gap-3 px-3.5 py-2.5'
+              } rounded-2xl text-emerald-100/80 hover:bg-white/12 hover:text-white transition-all`}
+            >
+              {sidebarCollapsed ? (
+                <PanelLeftOpen className="w-[18px] h-[18px] shrink-0" aria-hidden="true" />
+              ) : (
+                <PanelLeftClose className="w-[18px] h-[18px] shrink-0" aria-hidden="true" />
+              )}
+              {!sidebarCollapsed && <span className="text-xs font-semibold">Collapse Rail</span>}
+              {sidebarCollapsed && (
+                <span className="pointer-events-none opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity absolute left-full ml-3 px-2.5 py-1 rounded-full bg-[#1C2B25] text-white text-[11px] font-semibold whitespace-nowrap shadow-md z-50">
+                  Expand Rail
+                </span>
+              )}
+            </button>
+
             <button
               type="button"
               onClick={() => navigateToTab('settings')}
@@ -1079,31 +1156,54 @@ export default function App() {
         </aside>
 
         {/* 2. Central Workspace + Conditional Right Rail */}
-        <div className="flex-1 min-w-0 flex flex-col gap-5">
-          {/* Lightweight Header (No heavy bar) */}
-          <header className="flex flex-wrap md:flex-nowrap items-center justify-between gap-3 md:gap-4 px-1 sm:px-2 pt-1">
-            <div className="flex items-center gap-3 min-w-0 flex-1">
-              <div className="lg:hidden shrink-0">
-                <CareDeskLogoMark className="w-9 h-9" />
+        <div className="flex-1 min-w-0 flex flex-col gap-4 lg:h-full lg:min-h-0">
+          {/* Lightweight Header (Pinned at top on desktop) */}
+          <header className="shrink-0 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3 px-0.5 sm:px-1 pt-0.5">
+            <div className="flex items-center justify-between gap-2.5 min-w-0 sm:flex-1">
+              <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
+                <div className="lg:hidden shrink-0">
+                  <CareDeskLogoMark className="w-9 h-9" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h1 className="text-lg sm:text-xl lg:text-2xl font-bold tracking-tight text-[#1C2B25] leading-tight sm:truncate">
+                    {headerHeading}
+                  </h1>
+                  <p className="hidden sm:block text-xs md:text-[13px] text-[#6B7B73] truncate mt-0.5">
+                    {headerSubtitle}
+                  </p>
+                </div>
               </div>
-              <div className="min-w-0 flex-1">
-                <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-[#1C2B25] truncate">
-                  {headerHeading}
-                </h1>
-                <p className="text-xs sm:text-[13px] text-[#6B7B73] truncate mt-0.5">
-                  {headerSubtitle}
-                </p>
+
+              {/* Mobile-only right utility icons aligned beside title */}
+              <div className="flex sm:hidden items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setMobileSearchOpen((v) => !v)}
+                  aria-label="Toggle global clinic search"
+                  aria-expanded={mobileSearchOpen}
+                  className={`btn-press w-11 h-11 flex items-center justify-center border rounded-full transition-colors ${
+                    mobileSearchOpen
+                      ? 'bg-[#0F3D2E] border-[#0F3D2E] text-white'
+                      : 'bg-white border-[#DCE8E0] text-[#1C2B25] hover:bg-[#EEF3EF]'
+                  }`}
+                >
+                  <Search className="w-4 h-4" aria-hidden="true" />
+                </button>
               </div>
             </div>
 
-            <div className="flex items-center gap-2 sm:gap-2.5 shrink-0 flex-wrap">
-              {/* Mobile Search Toggle (< md) */}
+            <div className="flex items-center justify-between sm:justify-end gap-2 shrink-0">
+              <p className="sm:hidden text-xs text-[#6B7B73] truncate min-w-0 flex-1">
+                {activeClinic.name} · {formattedHeaderDate}
+              </p>
+
+              {/* Tablet Search Toggle (sm to < lg) */}
               <button
                 type="button"
                 onClick={() => setMobileSearchOpen((v) => !v)}
-                aria-label="Toggle global clinic search"
+                aria-label="Toggle clinic search"
                 aria-expanded={mobileSearchOpen}
-                className={`md:hidden btn-press w-10 h-10 flex items-center justify-center border rounded-full transition-colors ${
+                className={`hidden sm:flex lg:hidden btn-press w-10 h-10 items-center justify-center border rounded-full transition-colors ${
                   mobileSearchOpen
                     ? 'bg-[#0F3D2E] border-[#0F3D2E] text-white'
                     : 'bg-white border-[#DCE8E0] text-[#1C2B25] hover:bg-[#EEF3EF]'
@@ -1112,8 +1212,8 @@ export default function App() {
                 <Search className="w-4 h-4" aria-hidden="true" />
               </button>
 
-              {/* Search Pill (Desktop & Tablet) */}
-              <div ref={searchContainerRef} className="relative hidden md:block w-44 lg:w-52 xl:w-64">
+              {/* Search Pill (Desktop >= lg) */}
+              <div ref={searchContainerRef} className="relative hidden lg:block w-52 xl:w-64">
                 <Search
                   className="w-3.5 h-3.5 text-[#6B7B73] absolute left-3.5 top-1/2 -translate-y-1/2"
                   aria-hidden="true"
@@ -1241,14 +1341,14 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setNotifOpen((prev) => !prev)}
-                  className="btn-press relative w-10 h-10 flex items-center justify-center text-[#1C2B25] bg-white hover:bg-[#EEF3EF] border border-[#DCE8E0] rounded-full transition-colors"
+                  className="btn-press relative w-11 h-11 sm:w-10 sm:h-10 flex items-center justify-center text-[#1C2B25] bg-white hover:bg-[#EEF3EF] border border-[#DCE8E0] rounded-full transition-colors"
                   aria-label="Operational notifications"
                   aria-expanded={notifOpen}
                 >
                   <Bell className="w-4 h-4" aria-hidden="true" />
                   {alertBadgeCount > 0 && (
                     <span
-                      className="absolute top-2 right-2.5 w-2 h-2 rounded-full bg-[#34C38F] ring-2 ring-white"
+                      className="absolute top-2.5 right-2.5 w-2 h-2 rounded-full bg-[#34C38F] ring-2 ring-white"
                       aria-label={`${alertBadgeCount} active alerts`}
                     />
                   )}
@@ -1413,6 +1513,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => navigateToTab('profile')}
+                aria-label="Open administrator profile"
                 className={`hidden sm:inline-flex items-center gap-2 p-1 xl:pl-1.5 xl:pr-3 rounded-full border text-left transition-colors ${
                   activeTab === 'profile'
                     ? 'bg-[#E3F7EF] border-[#34C38F] text-[#0F3D2E]'
@@ -1436,7 +1537,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={handleQuickScheduleAppointment}
-                  className="btn-press px-3.5 sm:px-4 py-2.5 text-xs sm:text-sm font-semibold text-white bg-[#34C38F] hover:bg-[#24B07D] rounded-full shadow-xs transition-colors whitespace-nowrap shrink-0"
+                  className="btn-press min-h-[44px] sm:min-h-0 px-3.5 md:px-3 lg:px-4 py-2 text-xs lg:text-sm font-semibold text-white bg-[#0F3D2E] hover:bg-[#144D3B] rounded-full shadow-xs transition-colors whitespace-nowrap shrink-0"
                 >
                   + New Appointment
                 </button>
@@ -1444,9 +1545,9 @@ export default function App() {
             </div>
           </header>
 
-          {/* Collapsible Mobile Search Bar (< md) */}
+          {/* Collapsible Mobile & Tablet Search Bar (< lg) */}
           {mobileSearchOpen && (
-            <div className="md:hidden relative px-1 animate-view-enter">
+            <div className="lg:hidden relative px-1 animate-view-enter">
               <div className="relative">
                 <Search
                   className="w-3.5 h-3.5 text-[#6B7B73] absolute left-3.5 top-1/2 -translate-y-1/2"
@@ -1598,16 +1699,26 @@ export default function App() {
             </div>
           )}
 
-          {/* Central Workspace + Conditional Right-Hand Rail (Dashboard & Appointments only) */}
+          {/* Central Workspace + Conditional Right-Hand Rail (inner-only scroll on desktop) */}
           <div
-            className={`flex-1 min-w-0 ${
-              showRightRail ? 'flex flex-col xl:flex-row gap-5 items-start' : ''
+            className={`flex-1 min-w-0 lg:min-h-0 ${
+              showRightRail
+                ? 'flex flex-col xl:flex-row gap-4 lg:gap-5 items-stretch lg:overflow-y-auto xl:overflow-hidden'
+                : 'flex flex-col lg:overflow-y-auto'
             }`}
           >
-            <main className={showRightRail ? 'w-full xl:flex-1 min-w-0' : 'w-full min-w-0'}>
+            <main
+              className={`${
+                showRightRail
+                  ? 'w-full xl:flex-1 min-w-0 xl:h-full xl:overflow-y-auto xl:pr-1'
+                  : 'w-full flex-1 min-w-0 flex flex-col'
+              } ${activeTab === 'assistant' ? 'lg:h-full lg:min-h-0 lg:overflow-hidden' : ''}`}
+            >
               <div
                 key={`${activeClinic.id}-${activeTab}-${routePatientId ?? ''}-${routeStaffId ?? ''}`}
-                className="animate-view-enter"
+                className={`animate-view-enter ${
+                  activeTab === 'assistant' ? 'flex-1 min-h-0 flex flex-col lg:h-full' : ''
+                }`}
               >
                 {activeTab === 'dashboard' && (
                   <DashboardView
@@ -1631,6 +1742,7 @@ export default function App() {
                 )}
                 {activeTab === 'assistant' && (
                   <AssistantView
+                    userName={user.fullName}
                     onDataMutated={handleDataMutated}
                     onErrorNotice={handleErrorNotice}
                     onSuccessNotice={handleSuccessNotice}
@@ -1767,7 +1879,7 @@ export default function App() {
             </main>
 
             {showRightRail && (
-              <div className="w-full xl:w-[300px] 2xl:w-[330px] shrink-0">
+              <div className="w-full xl:w-[300px] 2xl:w-[330px] shrink-0 xl:h-full xl:overflow-y-auto xl:pr-0.5">
                 <RightRail
                   mode={activeTab === 'appointments' ? 'appointments' : 'dashboard'}
                   user={user}
@@ -1827,7 +1939,7 @@ export default function App() {
       {/* Mobile Bottom Tab Bar (< lg) */}
       <nav
         aria-label="Mobile Navigation"
-        className="lg:hidden fixed bottom-0 inset-x-0 z-40 h-14 bg-[#0F3D2E] text-emerald-50 border-t border-white/10 px-2 flex items-center justify-around shadow-lg"
+        className="lg:hidden fixed bottom-0 inset-x-0 z-40 min-h-[64px] bg-[#0F3D2E] text-emerald-50 border-t border-white/10 px-2 py-1.5 flex items-center justify-around shadow-lg"
       >
         {[
           { id: 'dashboard' as NavTab, label: 'Home', icon: Activity },
@@ -1846,7 +1958,7 @@ export default function App() {
                 setMobileMoreOpen(false);
               }}
               aria-current={isActive ? 'page' : undefined}
-              className={`flex flex-col items-center justify-center gap-0.5 px-3 py-1 rounded-xl transition-colors ${
+              className={`min-w-[52px] min-h-[44px] flex flex-col items-center justify-center gap-0.5 px-3 py-1.5 rounded-xl transition-colors ${
                 isActive ? 'text-[#34C38F]' : 'text-emerald-100/75 hover:text-white'
               }`}
             >
@@ -1859,7 +1971,7 @@ export default function App() {
           type="button"
           onClick={() => setMobileMoreOpen((v) => !v)}
           aria-expanded={mobileMoreOpen}
-          className={`flex flex-col items-center justify-center gap-0.5 px-3 py-1 rounded-xl transition-colors ${
+          className={`min-w-[52px] min-h-[44px] flex flex-col items-center justify-center gap-0.5 px-3 py-1.5 rounded-xl transition-colors ${
             mobileMoreOpen ||
             activeTab === 'followups' ||
             activeTab === 'reports' ||
@@ -1889,7 +2001,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setMobileMoreOpen(false)}
-                className="p-1.5 rounded-full hover:bg-[#EEF3EF]"
+                className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-full hover:bg-[#EEF3EF]"
                 aria-label="Close menu"
               >
                 <X className="w-4 h-4" aria-hidden="true" />

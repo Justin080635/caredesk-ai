@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   ArrowRight,
@@ -31,6 +31,7 @@ import {
   EditorialAvatar,
   WelcomeBannerMotif,
 } from './ClinicIllustrations';
+import { DashboardSkeleton } from './Skeletons';
 import { formatGreetingName } from '../utils/workspaceMath';
 import { AppointmentStatusText, DoctorDutyStatusText } from './StatusText';
 
@@ -101,6 +102,11 @@ export function DashboardView({
   const [loading, setLoading] = useState(true);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
 
+  const onDataSnapshotRef = useRef(onDataSnapshot);
+  const onErrorNoticeRef = useRef(onErrorNotice);
+  onDataSnapshotRef.current = onDataSnapshot;
+  onErrorNoticeRef.current = onErrorNotice;
+
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
@@ -116,13 +122,15 @@ export function DashboardView({
       setDayAppointments(dayApts);
       setAllAppointments(allApts);
       setDoctorAvailability(docAvail);
-      onDataSnapshot?.({ overview: overviewData, dayAppointments: dayApts });
+      onDataSnapshotRef.current?.({ overview: overviewData, dayAppointments: dayApts });
     } catch (err) {
-      onErrorNotice(err instanceof Error ? err.message : 'Unable to load dashboard metrics.');
+      onErrorNoticeRef.current(
+        err instanceof Error ? err.message : 'Unable to load dashboard metrics.'
+      );
     } finally {
       setLoading(false);
     }
-  }, [activeDate, onDataSnapshot, onErrorNotice]);
+  }, [activeDate]);
 
   useEffect(() => {
     loadData();
@@ -174,21 +182,7 @@ export function DashboardView({
   }, [overview]);
 
   if (loading && !daily) {
-    return (
-      <div className="space-y-5" aria-busy="true" aria-label="Loading operations dashboard">
-        <div className="h-44 rounded-[24px] bg-[#DCE8E0]/60 animate-pulse" />
-        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-3.5">
-          {Array.from({ length: 5 }).map((_, idx) => (
-            <div key={idx} className="h-32 card-surface rounded-[22px] animate-pulse" />
-          ))}
-        </div>
-        <div className="h-72 card-surface rounded-[24px] animate-pulse" />
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-          <div className="lg:col-span-7 h-72 card-surface rounded-[24px] animate-pulse" />
-          <div className="lg:col-span-5 h-72 card-surface rounded-[24px] animate-pulse" />
-        </div>
-      </div>
-    );
+    return <DashboardSkeleton />;
   }
 
   if (!daily || !overview) {
@@ -302,7 +296,7 @@ export function DashboardView({
                   ? onQuickScheduleAppointment()
                   : navigateTarget({ tab: 'appointments', date: activeDate })
               }
-              className="btn-press inline-flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold bg-[#34C38F] text-[#0F3D2E] hover:bg-[#49d39f] shadow-xs whitespace-nowrap"
+              className="btn-press min-h-[44px] sm:min-h-0 inline-flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold bg-[#34C38F] text-[#0F3D2E] hover:bg-[#49d39f] shadow-xs whitespace-nowrap"
             >
               <CalendarIcon className="w-3.5 h-3.5" aria-hidden="true" />
               Schedule Appointment
@@ -314,7 +308,7 @@ export function DashboardView({
                   ? onQuickRegisterPatient()
                   : navigateTarget({ tab: 'patients', status: 'All' })
               }
-              className="btn-press inline-flex items-center gap-2 px-4 py-2 rounded-full text-xs font-semibold bg-white/15 hover:bg-white/25 text-white whitespace-nowrap"
+              className="btn-press min-h-[44px] sm:min-h-0 inline-flex items-center gap-2 px-4 py-2 rounded-full text-xs font-semibold bg-white/15 hover:bg-white/25 text-white whitespace-nowrap"
             >
               <UserPlus className="w-3.5 h-3.5" aria-hidden="true" />
               Register Patient
@@ -463,12 +457,12 @@ export function DashboardView({
       </section>
 
       {/* 3. Main Chart Card (DualSeriesAreaChart + Segmented Filter Pills + Left Stat Tiles) */}
-      <section className="card-surface rounded-[24px] p-5 sm:p-6">
+      <section className="card-surface rounded-[24px] p-4 sm:p-6 min-w-0 overflow-hidden">
         <div className="flex items-center justify-end gap-2 mb-1">
           <button
             type="button"
             onClick={loadData}
-            className="btn-press inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold text-[#6B7B73] hover:text-[#1C2B25] bg-[#FAFBF9] border border-[#DCE8E0]"
+            className="btn-press min-h-[44px] sm:min-h-0 inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-semibold text-[#6B7B73] hover:text-[#1C2B25] bg-[#FAFBF9] border border-[#DCE8E0]"
           >
             <RefreshCw className="w-3 h-3" aria-hidden="true" />
             Sync
@@ -487,8 +481,8 @@ export function DashboardView({
       {/* 4. Unequal Lower Row: Today's Appointments (7 cols) & Operational Alerts (5 cols) */}
       <section className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
         {/* Today's Appointments */}
-        <div className="lg:col-span-7 card-surface rounded-[24px] overflow-hidden">
-          <div className="px-5 sm:px-6 py-4 border-b border-[#EEF3EF] flex items-center justify-between gap-3">
+        <div className="lg:col-span-7 min-w-0 card-surface rounded-[24px] overflow-hidden">
+          <div className="px-4 sm:px-6 py-4 border-b border-[#EEF3EF] flex flex-wrap items-center justify-between gap-3">
             <div>
               <h3 className="text-base font-bold text-[#1C2B25]">
                 {isViewingToday ? "Today's Appointments" : `Schedule · ${activeDate}`}
@@ -503,7 +497,7 @@ export function DashboardView({
               onClick={() =>
                 navigateTarget({ tab: 'appointments', date: activeDate, status: 'All' })
               }
-              className="px-3.5 py-1.5 rounded-full text-xs font-semibold text-[#0F3D2E] bg-[#EEF3EF] hover:bg-[#DCE8E0] transition-colors whitespace-nowrap"
+              className="min-h-[44px] sm:min-h-0 px-3.5 py-1.5 rounded-full text-xs font-semibold text-[#0F3D2E] bg-[#EEF3EF] hover:bg-[#DCE8E0] transition-colors whitespace-nowrap"
             >
               View Calendar
             </button>
@@ -542,9 +536,9 @@ export function DashboardView({
                       });
                     }
                   }}
-                  className={`${rowPad} flex items-center justify-between gap-3 hover:bg-[#F7FAF8] transition-colors cursor-pointer`}
+                  className={`${rowPad} flex flex-wrap sm:flex-nowrap items-center justify-between gap-2.5 sm:gap-3 hover:bg-[#F7FAF8] transition-colors cursor-pointer`}
                 >
-                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                  <div className="flex items-center gap-3 min-w-0 flex-1 basis-[200px]">
                     <EditorialAvatar
                       name={apt.patientName ?? apt.patientId}
                       role="patient"
@@ -560,8 +554,8 @@ export function DashboardView({
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2.5 shrink-0">
-                    <span className="font-mono text-xs font-semibold text-[#1C2B25] tabular-nums hidden sm:inline">
+                  <div className="flex items-center gap-2 sm:gap-2.5 shrink-0 ml-auto">
+                    <span className="font-mono text-xs font-semibold text-[#1C2B25] tabular-nums">
                       {apt.appointmentTime}
                     </span>
                     <AppointmentStatusText status={apt.status} />
@@ -571,7 +565,7 @@ export function DashboardView({
                         disabled={updatingId === apt.id}
                         onClick={(e) => handleQuickConfirm(e, apt.id)}
                         aria-label={`Confirm appointment ${apt.id}`}
-                        className="btn-press inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold text-[#0F3D2E] bg-[#DDF5E9] hover:bg-[#BCEAD4] disabled:opacity-50"
+                        className="btn-press min-h-[44px] sm:min-h-0 inline-flex items-center gap-1 px-3 py-1 rounded-full text-[11px] font-semibold text-[#0F3D2E] bg-[#DDF5E9] hover:bg-[#BCEAD4] disabled:opacity-50"
                       >
                         <Check className="w-3 h-3" aria-hidden="true" />
                         Confirm
@@ -585,14 +579,14 @@ export function DashboardView({
         </div>
 
         {/* Operational Alerts & Duty Summary */}
-        <div className="lg:col-span-5 space-y-5">
-          <div className="card-surface rounded-[24px] p-5 space-y-3.5">
+        <div className="lg:col-span-5 min-w-0 space-y-5">
+          <div className="card-surface rounded-[24px] p-4 sm:p-5 space-y-3.5">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold text-[#1C2B25]">Operational Alerts</h3>
               <button
                 type="button"
                 onClick={() => onNavigate('reports')}
-                className="text-xs font-semibold text-[#137A55] hover:text-[#0F3D2E]"
+                className="min-h-[44px] sm:min-h-0 inline-flex items-center px-2 sm:px-0 text-xs font-semibold text-[#137A55] hover:text-[#0F3D2E]"
               >
                 Reports
               </button>
@@ -613,9 +607,9 @@ export function DashboardView({
                 return (
                   <div
                     key={alert.id}
-                    className="p-3.5 rounded-[18px] bg-[#FAFBF9] border border-[#DCE8E0] flex items-start justify-between gap-3"
+                    className="p-3.5 rounded-[18px] bg-[#FAFBF9] border border-[#DCE8E0] flex flex-wrap sm:flex-nowrap items-start justify-between gap-3"
                   >
-                    <div className="flex items-start gap-3 min-w-0">
+                    <div className="flex items-start gap-3 min-w-0 flex-1">
                       <span
                         className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 mt-0.5 ${toneClass}`}
                       >
@@ -633,7 +627,7 @@ export function DashboardView({
                     <button
                       type="button"
                       onClick={alert.onClick}
-                      className="btn-press inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-[11px] font-semibold bg-white border border-[#DCE8E0] text-[#0F3D2E] hover:bg-[#EEF3EF] shrink-0"
+                      className="btn-press min-h-[44px] sm:min-h-0 inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-[11px] font-semibold bg-white border border-[#DCE8E0] text-[#0F3D2E] hover:bg-[#EEF3EF] shrink-0 ml-auto"
                     >
                       {alert.cta}
                       <ArrowRight className="w-3 h-3" aria-hidden="true" />
@@ -654,7 +648,7 @@ export function DashboardView({
                 <button
                   type="button"
                   onClick={() => navigateTarget({ tab: 'staff' })}
-                  className="text-xs font-semibold text-[#137A55] hover:underline"
+                  className="min-h-[44px] sm:min-h-0 inline-flex items-center px-2 sm:px-0 text-xs font-semibold text-[#137A55] hover:underline"
                 >
                   Roster
                 </button>

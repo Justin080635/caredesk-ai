@@ -152,7 +152,7 @@ export function DualSeriesAreaChart({
               type="button"
               onClick={() => setFilter(tab)}
               aria-pressed={filter === tab}
-              className={`btn-press px-3.5 py-1.5 text-xs font-semibold rounded-full transition-colors whitespace-nowrap ${
+              className={`btn-press min-h-[44px] sm:min-h-0 px-3.5 py-1.5 text-xs font-semibold rounded-full transition-colors whitespace-nowrap ${
                 filter === tab
                   ? 'bg-[#0F3D2E] text-white shadow-xs'
                   : 'text-[#6B7B73] hover:text-[#1C2B25]'

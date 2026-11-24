@@ -47,6 +47,7 @@ import {
 } from '../utils/workspaceMath';
 import { ClinicEmptyIllustration, EditorialAvatar } from './ClinicIllustrations';
 import { ModalShell } from './ModalShell';
+import { CardGridSkeleton, SkeletonBlock, TableSkeleton } from './Skeletons';
 import { AppointmentStatusText, DoctorDutyStatusText, RequestStatusText } from './StatusText';
 
 export interface AppointmentsRailAction {
@@ -765,13 +766,13 @@ export function AppointmentsView({
                   setPage(1);
                 }}
                 placeholder="Search ID, patient, doctor..."
-                className="w-full pl-9 pr-3 py-2 text-xs bg-[#FAFBF9] border border-[#DCE8E0] rounded-full focus:bg-white focus:outline-none focus:border-[#34C38F]"
+                className="w-full min-h-[44px] sm:min-h-0 pl-9 pr-3 py-2 text-xs bg-[#FAFBF9] border border-[#DCE8E0] rounded-full focus:bg-white focus:outline-none focus:border-[#34C38F]"
               />
             </div>
 
             {viewMode === 'list' && (
               <>
-                <div className="shrink-0">
+                <div className="w-full sm:w-auto shrink-0">
                   <label htmlFor="apt-date-filter" className="sr-only">
                     Filter by date
                   </label>
@@ -783,7 +784,7 @@ export function AppointmentsView({
                       setDateFilter(e.target.value);
                       setPage(1);
                     }}
-                    className="px-3 py-2 text-xs bg-[#FAFBF9] border border-[#DCE8E0] rounded-full"
+                    className="w-full sm:w-auto min-h-[44px] sm:min-h-0 px-3 py-2 text-xs bg-[#FAFBF9] border border-[#DCE8E0] rounded-full"
                   />
                 </div>
                 {dateFilter && (
@@ -793,7 +794,7 @@ export function AppointmentsView({
                       setDateFilter('');
                       setPage(1);
                     }}
-                    className="text-xs font-semibold text-[#137A55] hover:underline whitespace-nowrap"
+                    className="min-h-[44px] sm:min-h-0 px-2 text-xs font-semibold text-[#137A55] hover:underline whitespace-nowrap"
                   >
                     All Dates
                   </button>
@@ -801,7 +802,7 @@ export function AppointmentsView({
               </>
             )}
 
-            <div className="shrink-0">
+            <div className="w-full sm:w-auto shrink-0">
               <label htmlFor="apt-dept-filter" className="sr-only">
                 Filter by department
               </label>
@@ -812,7 +813,7 @@ export function AppointmentsView({
                   setDeptFilter(e.target.value);
                   setPage(1);
                 }}
-                className="px-3 py-2 text-xs bg-[#FAFBF9] border border-[#DCE8E0] rounded-full max-w-[155px]"
+                className="w-full sm:w-auto min-h-[44px] sm:min-h-0 px-3 py-2 text-xs bg-[#FAFBF9] border border-[#DCE8E0] rounded-full sm:max-w-[165px]"
               >
                 <option value="All">All Departments</option>
                 {CLINIC_DEPARTMENTS.map((dept) => (
@@ -823,7 +824,7 @@ export function AppointmentsView({
               </select>
             </div>
 
-            <div className="shrink-0">
+            <div className="w-full sm:w-auto shrink-0">
               <label htmlFor="apt-clinician-filter" className="sr-only">
                 Filter by clinician
               </label>
@@ -834,7 +835,7 @@ export function AppointmentsView({
                   setClinicianFilter(e.target.value);
                   setPage(1);
                 }}
-                className="px-3 py-2 text-xs bg-[#FAFBF9] border border-[#DCE8E0] rounded-full max-w-[155px]"
+                className="w-full sm:w-auto min-h-[44px] sm:min-h-0 px-3 py-2 text-xs bg-[#FAFBF9] border border-[#DCE8E0] rounded-full sm:max-w-[165px]"
               >
                 <option value="All">All Clinicians</option>
                 {clinicianOptions.map((c) => (
@@ -855,7 +856,7 @@ export function AppointmentsView({
               <button
                 type="button"
                 onClick={() => setViewMode('calendar')}
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-full transition-colors whitespace-nowrap ${
+                className={`inline-flex items-center gap-1.5 min-h-[44px] sm:min-h-0 px-3 py-1.5 text-xs font-semibold rounded-full transition-colors whitespace-nowrap ${
                   viewMode === 'calendar' ? 'bg-[#0F3D2E] text-white' : 'text-[#6B7B73]'
                 }`}
               >
@@ -865,7 +866,7 @@ export function AppointmentsView({
               <button
                 type="button"
                 onClick={() => setViewMode('list')}
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-full transition-colors whitespace-nowrap ${
+                className={`inline-flex items-center gap-1.5 min-h-[44px] sm:min-h-0 px-3 py-1.5 text-xs font-semibold rounded-full transition-colors whitespace-nowrap ${
                   viewMode === 'list' ? 'bg-[#0F3D2E] text-white' : 'text-[#6B7B73]'
                 }`}
               >
@@ -877,7 +878,7 @@ export function AppointmentsView({
             <button
               type="button"
               onClick={handleOpenAvailability}
-              className="btn-press inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-[#0F3D2E] bg-[#EEF3EF] hover:bg-[#DCE8E0] rounded-full transition-colors whitespace-nowrap"
+              className="btn-press inline-flex items-center gap-1.5 min-h-[44px] sm:min-h-0 px-3.5 py-2 text-xs font-semibold text-[#0F3D2E] bg-[#EEF3EF] hover:bg-[#DCE8E0] rounded-full transition-colors whitespace-nowrap"
             >
               <Clock className="w-3.5 h-3.5 text-[#137A55]" aria-hidden="true" />
               {showAvailability ? 'Hide Slots' : 'Availability'}
@@ -899,7 +900,7 @@ export function AppointmentsView({
                 setStatusFilter(st);
                 setPage(1);
               }}
-              className={`px-3 sm:px-3.5 py-1 text-xs font-semibold rounded-full transition-colors whitespace-nowrap shrink-0 ${
+              className={`min-h-[44px] sm:min-h-0 px-3 sm:px-3.5 py-1 text-xs font-semibold rounded-full transition-colors whitespace-nowrap shrink-0 ${
                 statusFilter === st
                   ? 'bg-white text-[#0F3D2E] shadow-xs'
                   : 'text-[#6B7B73] hover:text-[#1C2B25]'
@@ -932,7 +933,7 @@ export function AppointmentsView({
                   setAvailDept(e.target.value);
                   loadAvailability(e.target.value);
                 }}
-                className="px-3 py-1.5 text-xs border border-[#DCE8E0] rounded-full bg-white"
+                className="min-h-[40px] sm:min-h-0 px-3 py-1.5 text-xs border border-[#DCE8E0] rounded-full bg-white"
               >
                 <option value="All">All Departments</option>
                 {CLINIC_DEPARTMENTS.map((dept) => (
@@ -945,7 +946,7 @@ export function AppointmentsView({
           </div>
 
           {availLoading ? (
-            <div className="h-20 bg-[#EEF3EF] rounded-2xl animate-pulse" />
+            <SkeletonBlock className="h-24 rounded-2xl" />
           ) : (
             <div className="space-y-4">
               {availDoctors.length > 0 && (
@@ -1027,14 +1028,14 @@ export function AppointmentsView({
                   setActiveFocusDate(addDaysIso(focusDate, calendarScale === 'week' ? -7 : -1))
                 }
                 aria-label={calendarScale === 'week' ? 'Previous week' : 'Previous day'}
-                className="p-1.5 rounded-full bg-[#FAFBF9] border border-[#DCE8E0] text-[#1C2B25] hover:bg-[#EEF3EF]"
+                className="w-11 h-11 sm:w-8 sm:h-8 inline-flex items-center justify-center rounded-full bg-[#FAFBF9] border border-[#DCE8E0] text-[#1C2B25] hover:bg-[#EEF3EF]"
               >
                 <ChevronLeft className="w-4 h-4" aria-hidden="true" />
               </button>
               <button
                 type="button"
                 onClick={() => setActiveFocusDate(todayDate)}
-                className="px-3 py-1 rounded-full text-xs font-semibold bg-[#EEF3EF] text-[#0F3D2E] hover:bg-[#DCE8E0]"
+                className="min-h-[44px] sm:min-h-0 px-3.5 py-1 rounded-full text-xs font-semibold bg-[#EEF3EF] text-[#0F3D2E] hover:bg-[#DCE8E0]"
               >
                 Today
               </button>
@@ -1044,7 +1045,7 @@ export function AppointmentsView({
                   setActiveFocusDate(addDaysIso(focusDate, calendarScale === 'week' ? 7 : 1))
                 }
                 aria-label={calendarScale === 'week' ? 'Next week' : 'Next day'}
-                className="p-1.5 rounded-full bg-[#FAFBF9] border border-[#DCE8E0] text-[#1C2B25] hover:bg-[#EEF3EF]"
+                className="w-11 h-11 sm:w-8 sm:h-8 inline-flex items-center justify-center rounded-full bg-[#FAFBF9] border border-[#DCE8E0] text-[#1C2B25] hover:bg-[#EEF3EF]"
               >
                 <ChevronRight className="w-4 h-4" aria-hidden="true" />
               </button>
@@ -1080,7 +1081,7 @@ export function AppointmentsView({
                 <button
                   type="button"
                   onClick={() => setCalendarScale('week')}
-                  className={`px-3 py-1 text-xs font-semibold rounded-full transition-colors ${
+                  className={`min-h-[44px] sm:min-h-0 px-3 py-1 text-xs font-semibold rounded-full transition-colors ${
                     calendarScale === 'week' ? 'bg-white text-[#0F3D2E] shadow-xs' : 'text-[#6B7B73]'
                   }`}
                 >
@@ -1089,7 +1090,7 @@ export function AppointmentsView({
                 <button
                   type="button"
                   onClick={() => setCalendarScale('day')}
-                  className={`px-3 py-1 text-xs font-semibold rounded-full transition-colors ${
+                  className={`min-h-[44px] sm:min-h-0 px-3 py-1 text-xs font-semibold rounded-full transition-colors ${
                     calendarScale === 'day' ? 'bg-white text-[#0F3D2E] shadow-xs' : 'text-[#6B7B73]'
                   }`}
                 >
@@ -1100,13 +1101,21 @@ export function AppointmentsView({
           </div>
 
           {loading ? (
-            <div className="h-72 bg-[#FAFBF9] rounded-2xl animate-pulse" />
+            <CardGridSkeleton
+              cards={calendarScale === 'day' ? 1 : 4}
+              columnsClass={
+                calendarScale === 'day'
+                  ? 'grid-cols-1'
+                  : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4'
+              }
+              label="Loading appointment calendar"
+            />
           ) : (
             <div
               className={`grid gap-3 ${
                 calendarScale === 'day'
                   ? 'grid-cols-1'
-                  : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-7'
+                  : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-7'
               }`}
             >
               {weekColumns.map((col) => (
@@ -1153,7 +1162,7 @@ export function AppointmentsView({
                             setCreateError(null);
                             setShowCreateModal(true);
                           }}
-                          className="mt-1.5 text-[11px] font-semibold text-[#137A55] hover:underline"
+                          className="mt-1.5 min-h-[44px] sm:min-h-0 px-3 sm:px-0 inline-flex items-center text-[11px] font-semibold text-[#137A55] hover:underline"
                         >
                           + Book slot
                         </button>
@@ -1221,21 +1230,7 @@ export function AppointmentsView({
           </div>
 
           {loading ? (
-            <div className="p-5 space-y-3" aria-busy="true" aria-label="Loading appointments">
-              {Array.from({ length: 6 }).map((_, i) => (
-                <div
-                  key={i}
-                  className="flex items-center gap-3 p-3 rounded-2xl bg-[#FAFBF9] animate-pulse"
-                >
-                  <div className="w-9 h-9 rounded-full bg-[#DCE8E0] shrink-0" />
-                  <div className="flex-1 space-y-1.5">
-                    <div className="h-3.5 w-44 bg-[#DCE8E0] rounded" />
-                    <div className="h-2.5 w-32 bg-[#EEF3EF] rounded" />
-                  </div>
-                  <div className="h-5 w-20 bg-[#DCE8E0] rounded-full" />
-                </div>
-              ))}
-            </div>
+            <TableSkeleton rows={6} label="Loading appointments" />
           ) : loadError ? (
             <div className="p-10 text-center space-y-3">
               <AlertTriangle className="w-8 h-8 text-rose-700 mx-auto" aria-hidden="true" />
@@ -1301,7 +1296,108 @@ export function AppointmentsView({
             </div>
           ) : (
             <>
-              <div className="overflow-x-auto">
+              {/* Mobile stacked cards */}
+              <div className="md:hidden divide-y divide-[#EEF3EF]">
+                {listAppointments.map((apt) => (
+                  <article
+                    key={apt.id}
+                    className={`p-4 space-y-3 ${
+                      detailApt?.id === apt.id ? 'bg-[#E9F5EE]/75' : 'bg-white'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <EditorialAvatar
+                          name={apt.patientName ?? apt.patientId}
+                          role="patient"
+                          size="sm"
+                        />
+                        <div className="min-w-0">
+                          {onOpenPatient ? (
+                            <button
+                              type="button"
+                              onClick={() => onOpenPatient(apt.patientId)}
+                              className="text-sm font-bold text-[#137A55] hover:underline truncate block text-left"
+                            >
+                              {apt.patientName ?? apt.patientId}
+                            </button>
+                          ) : (
+                            <div className="text-sm font-bold text-[#1C2B25] truncate">
+                              {apt.patientName ?? apt.patientId}
+                            </div>
+                          )}
+                          <div className="text-[11px] font-mono text-[#6B7B73]">
+                            {apt.id} · {apt.patientId}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <AppointmentStatusText status={apt.status} />
+                        <RequestStatusText status={apt.requestStatus} />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-xs bg-[#FAFBF9] border border-[#EEF3EF] rounded-xl p-2.5">
+                      <div>
+                        <span className="text-[10px] text-[#6B7B73] block">Date &amp; Time</span>
+                        <span className="font-mono font-semibold text-[#1C2B25] tabular-nums">
+                          {apt.appointmentDate} · {apt.appointmentTime}
+                        </span>
+                      </div>
+                      <div className="min-w-0">
+                        <span className="text-[10px] text-[#6B7B73] block">Clinician</span>
+                        <span className="font-medium text-[#1C2B25] truncate block">
+                          {apt.department} · {apt.clinician}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveFocusDate(apt.appointmentDate);
+                          setDetailApt(apt);
+                        }}
+                        className="btn-press min-h-[44px] px-3.5 py-2 text-xs font-semibold text-[#1C2B25] bg-[#FAFBF9] border border-[#DCE8E0] rounded-full"
+                      >
+                        Inspect
+                      </button>
+                      {canWrite && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => openEditModal(apt)}
+                            className="btn-press min-h-[44px] px-3.5 py-2 text-xs font-semibold text-[#0F3D2E] bg-[#E3F7EF] rounded-full"
+                          >
+                            Reschedule
+                          </button>
+                          {apt.status !== 'Cancelled' && apt.status !== 'Completed' && (
+                            <button
+                              type="button"
+                              onClick={() => setCancellingApt(apt)}
+                              className="btn-press min-h-[44px] px-3 py-2 text-xs font-semibold text-amber-800 bg-amber-50 rounded-full"
+                            >
+                              Cancel
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => setDeletingApt(apt)}
+                            className="btn-press min-h-[44px] px-3 py-2 text-xs font-semibold text-rose-700 bg-rose-50 rounded-full inline-flex items-center gap-1 ml-auto"
+                            aria-label={`Delete appointment ${apt.id}`}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                            Delete
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </article>
+                ))}
+              </div>
+
+              <div className="hidden md:block overflow-x-auto">
                 <table className="w-full text-left border-collapse">
                   <thead>
                     <tr className="border-b border-[#EEF3EF] bg-[#FAFBF9] text-xs">
@@ -1465,7 +1561,7 @@ export function AppointmentsView({
                     type="button"
                     disabled={paginationMeta.page <= 1 || loading}
                     onClick={() => setPage((p) => Math.max(1, p - 1))}
-                    className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-[#1C2B25] bg-white hover:bg-[#EEF3EF] border border-[#DCE8E0] rounded-full disabled:opacity-45 disabled:pointer-events-none"
+                    className="inline-flex items-center gap-1 min-h-[44px] sm:min-h-[32px] px-3.5 sm:px-3 py-1.5 text-xs font-semibold text-[#1C2B25] bg-white hover:bg-[#EEF3EF] border border-[#DCE8E0] rounded-full disabled:opacity-45 disabled:pointer-events-none"
                     aria-label="Previous page"
                   >
                     <ChevronLeft className="w-3.5 h-3.5" aria-hidden="true" />
@@ -1487,7 +1583,7 @@ export function AppointmentsView({
                         onClick={() => setPage(item)}
                         aria-label={`Page ${item}`}
                         aria-current={item === paginationMeta.page ? 'page' : undefined}
-                        className={`min-w-[30px] h-[30px] px-2 text-xs font-mono font-semibold rounded-full transition-colors ${
+                        className={`min-w-[40px] h-[40px] sm:min-w-[32px] sm:h-[32px] px-2 text-xs font-mono font-semibold rounded-full transition-colors ${
                           item === paginationMeta.page
                             ? 'bg-[#0F3D2E] text-white'
                             : 'bg-white text-[#1C2B25] border border-[#DCE8E0] hover:bg-[#EEF3EF]'
@@ -1502,7 +1598,7 @@ export function AppointmentsView({
                     type="button"
                     disabled={paginationMeta.page >= paginationMeta.totalPages || loading}
                     onClick={() => setPage((p) => Math.min(paginationMeta.totalPages, p + 1))}
-                    className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-[#1C2B25] bg-white hover:bg-[#EEF3EF] border border-[#DCE8E0] rounded-full disabled:opacity-45 disabled:pointer-events-none"
+                    className="inline-flex items-center gap-1 min-h-[44px] sm:min-h-[32px] px-3.5 sm:px-3 py-1.5 text-xs font-semibold text-[#1C2B25] bg-white hover:bg-[#EEF3EF] border border-[#DCE8E0] rounded-full disabled:opacity-45 disabled:pointer-events-none"
                     aria-label="Next page"
                   >
                     Next

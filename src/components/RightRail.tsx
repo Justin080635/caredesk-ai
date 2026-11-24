@@ -109,7 +109,7 @@ export function RightRail({
   return (
     <aside
       aria-label={mode === 'dashboard' ? 'Operations Side Rail' : 'Selected Day Inspector'}
-      className="w-full space-y-4"
+      className="w-full grid grid-cols-1 md:grid-cols-2 xl:grid-cols-1 gap-4 items-start"
     >
       {/* 1. Profile Card */}
       <div className="card-surface rounded-[22px] p-4 space-y-3">
@@ -141,7 +141,7 @@ export function RightRail({
             type="button"
             onClick={onOpenProfile}
             aria-label="Open administrator profile"
-            className="p-2 rounded-full bg-[#EEF3EF] hover:bg-[#DCE8E0] text-[#0F3D2E] transition-colors shrink-0"
+            className="w-11 h-11 md:w-9 md:h-9 flex items-center justify-center rounded-full bg-[#EEF3EF] hover:bg-[#DCE8E0] text-[#0F3D2E] transition-colors shrink-0"
           >
             <UserCircle className="w-4 h-4" aria-hidden="true" />
           </button>
@@ -155,7 +155,7 @@ export function RightRail({
           <button
             type="button"
             onClick={onOpenStaffRoster}
-            className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#137A55] hover:text-[#0F3D2E] shrink-0"
+            className="min-h-[44px] md:min-h-0 px-2 md:px-0 inline-flex items-center gap-1 text-[11px] font-semibold text-[#137A55] hover:text-[#0F3D2E] shrink-0"
           >
             <Stethoscope className="w-3 h-3" aria-hidden="true" />
             Staff
@@ -192,7 +192,7 @@ export function RightRail({
               <button
                 type="button"
                 onClick={() => onSelectDate(todayDate)}
-                className="px-2 py-0.5 rounded-full bg-[#EEF3EF] text-[11px] font-semibold text-[#0F3D2E] hover:bg-[#DCE8E0]"
+                className="min-h-[44px] md:min-h-0 px-2.5 md:px-2 py-0.5 rounded-full bg-[#EEF3EF] text-[11px] font-semibold text-[#0F3D2E] hover:bg-[#DCE8E0]"
               >
                 Today
               </button>
@@ -201,7 +201,7 @@ export function RightRail({
               type="button"
               onClick={() => onSelectDate(addDaysIso(focusDate, -7))}
               aria-label="Previous week"
-              className="p-1 rounded-full text-[#6B7B73] hover:text-[#1C2B25] hover:bg-[#EEF3EF]"
+              className="w-11 h-11 md:w-8 md:h-8 flex items-center justify-center rounded-full text-[#6B7B73] hover:text-[#1C2B25] hover:bg-[#EEF3EF]"
             >
               <ChevronLeft className="w-4 h-4" aria-hidden="true" />
             </button>
@@ -209,7 +209,7 @@ export function RightRail({
               type="button"
               onClick={() => onSelectDate(addDaysIso(focusDate, 7))}
               aria-label="Next week"
-              className="p-1 rounded-full text-[#6B7B73] hover:text-[#1C2B25] hover:bg-[#EEF3EF]"
+              className="w-11 h-11 md:w-8 md:h-8 flex items-center justify-center rounded-full text-[#6B7B73] hover:text-[#1C2B25] hover:bg-[#EEF3EF]"
             >
               <ChevronRight className="w-4 h-4" aria-hidden="true" />
             </button>
@@ -224,7 +224,7 @@ export function RightRail({
               onClick={() => onSelectDate(day.dateKey)}
               aria-pressed={day.isSelected}
               aria-label={`${day.shortDay} ${day.monthShort} ${day.dayNum}`}
-              className={`btn-press flex flex-col items-center justify-center py-2 rounded-2xl transition-colors ${
+              className={`btn-press min-h-[44px] flex flex-col items-center justify-center py-2 rounded-2xl transition-colors ${
                 day.isSelected
                   ? 'bg-[#34C38F] text-[#0F3D2E] font-bold shadow-xs'
                   : day.isToday
@@ -485,7 +485,7 @@ export function RightRail({
                     ? onSelectAppointment(apt)
                     : onOpenAppointmentDetail(apt)
                 }
-                className="inline-flex items-center gap-0.5 text-xs font-semibold text-[#137A55] hover:text-[#0F3D2E] whitespace-nowrap shrink-0"
+                className="min-h-[40px] sm:min-h-0 inline-flex items-center gap-0.5 text-xs font-semibold text-[#137A55] hover:text-[#0F3D2E] whitespace-nowrap shrink-0"
               >
                 Details <ChevronRight className="w-3.5 h-3.5" aria-hidden="true" />
               </button>

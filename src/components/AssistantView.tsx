@@ -5,19 +5,21 @@ import {
   ArrowRight,
   Bot,
   Calendar,
+  Check,
   CheckCircle2,
   Clock,
+  Copy,
   FileText,
   History,
-  Loader2,
   MessageSquarePlus,
+  PanelRightClose,
+  PanelRightOpen,
   RotateCcw,
   Send,
-  ShieldAlert,
   ShieldCheck,
+  Sparkles,
   Square,
   Trash2,
-  Wrench,
 } from 'lucide-react';
 import {
   confirmAssistantAction,
@@ -35,6 +37,7 @@ import type {
   AccountRole,
   AiConversationSummary,
   Appointment,
+  AssistantPlannedTool,
   AssistantResponse,
   AvailableSlot,
   ConsultationRecord,
@@ -45,6 +48,16 @@ import type {
   OverviewReport,
   PatientHomeData,
 } from '../shared/types';
+import {
+  buildCopyableReplyText,
+  formatApprovalPreviewText,
+  formatAssistantGreeting,
+  formatFriendlyToolDescription,
+  formatFriendlyToolStatus,
+  getFriendlyToolMeta,
+  humanizeAssistantError,
+  sanitizeTechnicalText,
+} from '../utils/assistantUi';
 import type { DashboardFilteredTarget } from './DashboardView';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { AppointmentStatusText, DoctorDutyStatusText, PriorityText } from './StatusText';
@@ -67,83 +80,20 @@ interface ChatTurn {
   response?: AssistantResponse;
   confirmedActionId?: string;
   failedPrompt?: string;
+  failedQueryText?: string;
   cancelled?: boolean;
   selectedSlotOverride?: AvailableSlot;
 }
 
-const PROMPT_GROUPS_BY_ROLE: Record<
-  'admin' | 'Doctor' | 'Patient',
-  Array<{ label: string; prompts: string[] }>
-> = {
-  admin: [
-    {
-      label: 'Briefings & Queue Audits',
-      prompts: [
-        "Give me today's clinic briefing.",
-        'Show pending appointments.',
-        'Identify overdue follow-ups.',
-        'Identify patients who missed appointments during the last seven days.',
-      ],
-    },
-    {
-      label: 'Doctors, Slots & Scheduling',
-      prompts: [
-        'Which doctors are available today?',
-        'Prepare an administrative follow-up list.',
-        'Find available appointment slots.',
-        'Reschedule patient P-1042.',
-      ],
-    },
-  ],
-  Doctor: [
-    {
-      label: 'My Schedule & Visits',
-      prompts: [
-        'Show my appointments for today.',
-        'What is my next appointment?',
-        'Summarize my schedule and leave blocks.',
-        'Which follow-ups require my attention?',
-      ],
-    },
-    {
-      label: 'Patient Lookup & Clinical Prep',
-      prompts: [
-        'Show patient P-1042.',
-        'Summarize recent consultations I authored.',
-        'Check open follow-ups assigned to me.',
-      ],
-    },
-  ],
-  Patient: [
-    {
-      label: 'My Appointments & Slots',
-      prompts: [
-        'When is my next appointment?',
-        'Show all my upcoming appointments.',
-        'Find open appointment slots in Cardiology.',
-        'Find open appointment slots this week.',
-      ],
-    },
-    {
-      label: 'My Health & Follow-ups',
-      prompts: [
-        'Summarize my recent consultations and prescriptions.',
-        'Show my lab and test results.',
-        'What follow-up instructions do I have?',
-      ],
-    },
-  ],
-};
-
-function getTimeGreeting(): string {
-  const hr = new Date().getHours();
-  if (hr < 12) return 'Good morning';
-  if (hr < 17) return 'Good afternoon';
-  return 'Good evening';
+interface SuggestionChip {
+  label: string;
+  queryText: string;
+  hint?: string;
 }
 
 interface AssistantViewProps {
   role?: AccountRole;
+  userName?: string;
   onDataMutated: () => void;
   onErrorNotice: (msg: string) => void;
   onSuccessNotice: (msg: string) => void;
@@ -152,8 +102,28 @@ interface AssistantViewProps {
   onInitialPromptConsumed?: () => void;
 }
 
+function getToolStatusPillClasses(
+  status: AssistantPlannedTool['status'] | 'running'
+): string {
+  switch (status) {
+    case 'running':
+      return 'bg-[#E3F7EF] text-[#137A55] border-[#BBE9D5]';
+    case 'executed-via-local-rest':
+    case 'local-rest-preview':
+      return 'bg-[#E3F7EF] text-[#0F3D2E] border-[#BBE9D5]';
+    case 'awaiting-confirmation':
+      return 'bg-amber-50 text-amber-800 border-amber-200';
+    case 'failed':
+    case 'mcp-not-connected':
+      return 'bg-rose-50 text-rose-700 border-rose-200';
+    default:
+      return 'bg-[#E3F7EF] text-[#0F3D2E] border-[#BBE9D5]';
+  }
+}
+
 export function AssistantView({
   role = 'Clinic Administrator',
+  userName,
   onDataMutated,
   onErrorNotice,
   onSuccessNotice,
@@ -164,12 +134,15 @@ export function AssistantView({
   const [input, setInput] = useState('');
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [loading, setLoading] = useState(false);
-  const [streamPhase, setStreamPhase] = useState<string>('Preparing workspace query...');
   const [liveTools, setLiveTools] = useState<LiveToolStep[]>([]);
   const [streamingText, setStreamingText] = useState('');
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [confirmErrorByTurn, setConfirmErrorByTurn] = useState<Record<string, string>>({});
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
+  const [copiedTurnId, setCopiedTurnId] = useState<string | null>(null);
+  const [whatIDidOpen, setWhatIDidOpen] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? window.innerWidth >= 1024 : true
+  );
   const [conversations, setConversations] = useState<AiConversationSummary[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [loadingConversations, setLoadingConversations] = useState(false);
@@ -233,7 +206,7 @@ export function AssistantView({
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = 'auto';
-    el.style.height = `${Math.min(140, Math.max(42, el.scrollHeight))}px`;
+    el.style.height = `${Math.min(132, Math.max(44, el.scrollHeight))}px`;
   }, [input]);
 
   const prevTurnCountRef = useRef(0);
@@ -243,7 +216,7 @@ export function AssistantView({
     if (!container) return;
     const distanceFromBottom =
       container.scrollHeight - container.scrollTop - container.clientHeight;
-    if (force || distanceFromBottom < 220) {
+    if (force || distanceFromBottom < 240) {
       feedEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
     }
   }, []);
@@ -267,27 +240,21 @@ export function AssistantView({
   };
 
   const submitPrompt = useCallback(
-    async (promptText: string) => {
-      const trimmed = promptText.trim();
-      if (!trimmed || loading) return;
+    async (displayText: string, overrideQueryText?: string) => {
+      const trimmedDisplay = displayText.trim();
+      const trimmedQuery = (overrideQueryText ?? displayText).trim();
+      if (!trimmedQuery || loading) return;
 
       const userTurn: ChatTurn = {
         id: `user-${Date.now()}`,
         role: 'user',
-        text: trimmed,
+        text: trimmedDisplay,
         timestamp: formatTimeNow(),
       };
 
       setTurns((prev) => [...prev, userTurn]);
       setInput('');
       setLoading(true);
-      setStreamPhase(
-        role === 'Patient'
-          ? 'Checking your verified clinic records...'
-          : role === 'Doctor'
-            ? 'Checking your clinical schedule & caseload...'
-            : 'Interpreting administrative request...'
-      );
       setLiveTools([]);
       setStreamingText('');
 
@@ -295,13 +262,11 @@ export function AssistantView({
       abortControllerRef.current = controller;
 
       try {
-        const response = await streamAssistantQuery(trimmed, {
+        const response = await streamAssistantQuery(trimmedQuery, {
           conversationId: activeConversationId ?? undefined,
           signal: controller.signal,
           onEvent: (event) => {
-            if (event.type === 'status') {
-              setStreamPhase(event.message);
-            } else if (event.type === 'tool_start') {
+            if (event.type === 'tool_start') {
               setLiveTools((prev) => [
                 ...prev,
                 {
@@ -354,26 +319,28 @@ export function AssistantView({
             {
               id: `cancelled-${Date.now()}`,
               role: 'error',
-              text: 'Response generation was stopped before completion.',
+              text: 'I stopped checking before finishing. Want me to run that again?',
               timestamp: formatTimeNow(),
-              failedPrompt: trimmed,
+              failedPrompt: trimmedDisplay,
+              failedQueryText: trimmedQuery,
               cancelled: true,
             },
           ]);
         } else {
-          const message =
-            err instanceof Error ? err.message : 'Unable to reach CareDesk Assistant.';
+          const rawMessage = err instanceof Error ? err.message : '';
+          const friendlyMessage = humanizeAssistantError(rawMessage);
           setTurns((prev) => [
             ...prev,
             {
               id: `error-${Date.now()}`,
               role: 'error',
-              text: message,
+              text: friendlyMessage,
               timestamp: formatTimeNow(),
-              failedPrompt: trimmed,
+              failedPrompt: trimmedDisplay,
+              failedQueryText: trimmedQuery,
             },
           ]);
-          onErrorNotice(message);
+          onErrorNotice(friendlyMessage);
         }
       } finally {
         abortControllerRef.current = null;
@@ -382,7 +349,7 @@ export function AssistantView({
         setStreamingText('');
       }
     },
-    [loading, onErrorNotice, role, activeConversationId, loadConversations]
+    [loading, onErrorNotice, activeConversationId, loadConversations]
   );
 
   const handleOpenSavedConversation = async (convId: string) => {
@@ -403,7 +370,9 @@ export function AssistantView({
         }))
       );
     } catch (err) {
-      onErrorNotice(err instanceof Error ? err.message : 'Unable to load saved conversation.');
+      onErrorNotice(
+        humanizeAssistantError(err instanceof Error ? err.message : 'Unable to load conversation.')
+      );
     }
   };
 
@@ -430,7 +399,9 @@ export function AssistantView({
       }
       loadConversations();
     } catch (err) {
-      onErrorNotice(err instanceof Error ? err.message : 'Unable to delete conversation.');
+      onErrorNotice(
+        humanizeAssistantError(err instanceof Error ? err.message : 'Unable to delete conversation.')
+      );
     }
   };
 
@@ -482,10 +453,11 @@ export function AssistantView({
         },
       ]);
       onDataMutated();
-      onSuccessNotice(result.headline || 'Assistant action applied to clinic records.');
+      onSuccessNotice(sanitizeTechnicalText(result.headline || 'Change saved to clinic records.'));
     } catch (err) {
-      const msg =
-        err instanceof Error ? err.message : 'Unable to execute confirmed action.';
+      const msg = humanizeAssistantError(
+        err instanceof Error ? err.message : 'Could not save that change.'
+      );
       setConfirmErrorByTurn((prev) => ({ ...prev, [turn.id]: msg }));
       onErrorNotice(msg);
     } finally {
@@ -497,102 +469,141 @@ export function AssistantView({
     setDismissedIds((prev) => new Set(prev).add(confirmationId));
   };
 
-  const promptGroups =
-    role === 'Doctor'
-      ? PROMPT_GROUPS_BY_ROLE.Doctor
-      : role === 'Patient'
-        ? PROMPT_GROUPS_BY_ROLE.Patient
-        : PROMPT_GROUPS_BY_ROLE.admin;
+  const copyTextWithFallback = async (text: string): Promise<boolean> => {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch {
+        // Fallback below for restricted or headless browser contexts
+      }
+    }
+    if (typeof document === 'undefined') return false;
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.className = 'fixed -top-[9999px] -left-[9999px] opacity-0 pointer-events-none';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    textarea.setSelectionRange(0, textarea.value.length);
+    let copied = false;
+    try {
+      copied = document.execCommand('copy');
+    } catch {
+      copied = false;
+    } finally {
+      document.body.removeChild(textarea);
+    }
+    return copied;
+  };
 
-  const welcomeCards =
+  const handleCopyTurn = async (turn: ChatTurn) => {
+    const text = buildCopyableReplyText(turn.text, turn.response);
+    if (!text) return;
+    const copied = await copyTextWithFallback(text);
+    if (copied) {
+      setCopiedTurnId(turn.id);
+      window.setTimeout(() => {
+        setCopiedTurnId((prev) => (prev === turn.id ? null : prev));
+      }, 1800);
+    } else {
+      onErrorNotice('Unable to copy reply to clipboard.');
+    }
+  };
+
+  const suggestionChips: SuggestionChip[] =
     role === 'Doctor'
       ? [
           {
-            title: 'Show my appointments for today.',
-            subtitle: clinicBrief.doctorDash
-              ? `${clinicBrief.doctorDash.todayAppointments.length} assigned visits · ${clinicBrief.doctorDash.effectiveOperationalState}`
-              : 'View your live patient queue and statuses',
+            label: 'Show my appointments today',
+            queryText: 'Show my appointments for today.',
+            hint: clinicBrief.doctorDash
+              ? `${clinicBrief.doctorDash.todayAppointments.length} visits today`
+              : undefined,
           },
           {
-            title: 'What is my next appointment?',
-            subtitle: clinicBrief.doctorDash?.nextAppointment
-              ? `${clinicBrief.doctorDash.nextAppointment.appointmentTime} · ${clinicBrief.doctorDash.nextAppointment.patientName}`
-              : 'Inspect your next scheduled patient visit',
+            label: 'What is my next appointment?',
+            queryText: 'What is my next appointment?',
+            hint: clinicBrief.doctorDash?.nextAppointment
+              ? clinicBrief.doctorDash.nextAppointment.appointmentTime
+              : undefined,
           },
           {
-            title: 'Which follow-ups require my attention?',
-            subtitle: clinicBrief.doctorDash
-              ? `${clinicBrief.doctorDash.followupsRequiringAttention.length} open tasks assigned to you`
-              : 'Audit clinical and administrative follow-ups',
+            label: 'Which follow-ups need me?',
+            queryText: 'Which follow-ups require my attention?',
+            hint: clinicBrief.doctorDash
+              ? `${clinicBrief.doctorDash.followupsRequiringAttention.length} open`
+              : undefined,
           },
           {
-            title: 'Summarize my schedule and leave blocks.',
-            subtitle: 'Check weekly hours, break windows & unavailability',
+            label: 'Summarize my schedule',
+            queryText: 'Summarize my schedule and leave blocks.',
           },
         ]
       : role === 'Patient'
         ? [
             {
-              title: 'When is my next appointment?',
-              subtitle: clinicBrief.patientHome?.nextAppointment
-                ? `${clinicBrief.patientHome.nextAppointment.appointmentDate} · ${clinicBrief.patientHome.nextAppointment.clinician}`
-                : 'Check your upcoming clinic visits',
+              label: 'When is my next appointment?',
+              queryText: 'When is my next appointment?',
+              hint: clinicBrief.patientHome?.nextAppointment?.appointmentDate,
             },
             {
-              title: 'Find open appointment slots this week.',
-              subtitle: 'Browse real-time available slots across doctors',
+              label: 'Find the next free slot',
+              queryText: 'Find open appointment slots this week.',
             },
             {
-              title: 'Summarize my recent consultations and prescriptions.',
-              subtitle: clinicBrief.patientHome
-                ? `${clinicBrief.patientHome.recentConsultationsCount} published doctor record(s)`
-                : 'View doctor-approved notes and prescriptions',
+              label: 'Recent visits & prescriptions',
+              queryText: 'Summarize my recent consultations and prescriptions.',
             },
             {
-              title: 'What follow-up instructions do I have?',
-              subtitle: clinicBrief.patientHome
-                ? `${clinicBrief.patientHome.openFollowups.length} active follow-up item(s)`
-                : 'Review care recommendations and next steps',
+              label: 'My follow-up instructions',
+              queryText: 'What follow-up instructions do I have?',
             },
           ]
         : [
             {
-              title: "Give me today's clinic briefing.",
-              subtitle: clinicBrief.daily
-                ? `${clinicBrief.daily.totalAppointments} scheduled visits on ${clinicBrief.daily.date}`
-                : 'Structured 5-part overview & operational alerts',
+              label: "Give me today's briefing",
+              queryText: "Give me today's clinic briefing.",
+              hint: clinicBrief.daily ? `${clinicBrief.daily.totalAppointments} visits today` : undefined,
             },
             {
-              title: 'Which doctors are available today?',
-              subtitle: 'Check live duty states, capacity & open slots',
+              label: 'Who missed appointments this week?',
+              queryText: 'Identify patients who missed appointments during the last seven days.',
+              hint: clinicBrief.overview
+                ? `${clinicBrief.overview.missedLastSevenDaysCount} missed`
+                : undefined,
             },
             {
-              title: 'Identify overdue follow-ups.',
-              subtitle: clinicBrief.overview
-                ? `${clinicBrief.overview.pendingFollowUpsCount} open · ${clinicBrief.overview.overdueFollowUpsCount} overdue`
-                : 'Audit pending administrative follow-up queue',
+              label: 'Which follow-ups are overdue?',
+              queryText: 'Identify overdue follow-ups.',
+              hint: clinicBrief.overview
+                ? `${clinicBrief.overview.overdueFollowUpsCount} overdue`
+                : undefined,
             },
             {
-              title: 'Reschedule patient P-1042.',
-              subtitle: 'Propose conflict-free slot with human approval gate',
+              label: 'Find the next free slot',
+              queryText: 'Find the next available appointment slot',
             },
           ];
 
+  const greetingLine = formatAssistantGreeting(userName);
   const lastTurnId = turns[turns.length - 1]?.id;
-
-  // Derive the active pending approval turn (most recent assistant turn with unresolved confirmation)
-  const pendingApprovalTurn = [...turns]
-    .reverse()
-    .find((t) => {
-      const p = t.response?.pendingConfirmation;
-      if (!p) return false;
-      return (
-        t.confirmedActionId !== p.confirmationId && !dismissedIds.has(p.confirmationId)
-      );
-    });
-
-  // Derive latest assistant turn for the Right Rail Tool-Call Status panel
   const latestAssistantTurn = [...turns].reverse().find((t) => t.role === 'assistant');
+
+  const panelTools = loading
+    ? liveTools.map((t) => ({
+        id: t.toolCallId,
+        toolName: t.toolName,
+        description: formatFriendlyToolDescription(t),
+        status: t.status,
+      }))
+    : (latestAssistantTurn?.response?.plannedTools ?? []).map((t, idx) => ({
+        id: `${t.toolName}-${idx}`,
+        toolName: t.toolName,
+        description: formatFriendlyToolDescription(t),
+        status: t.status,
+      }));
 
   const renderApprovalCard = (turn: ChatTurn) => {
     const pending = turn.response?.pendingConfirmation;
@@ -600,38 +611,34 @@ export function AssistantView({
     const activeSlotOverride = turn.selectedSlotOverride;
     const confirmErr = confirmErrorByTurn[turn.id];
     const isWorking = confirmingId === pending.confirmationId;
+    const previewSentence = formatApprovalPreviewText(pending, activeSlotOverride);
 
     return (
-      <div className="rounded-[24px] bg-white border-2 border-amber-300 shadow-sm p-5 space-y-4">
-        <div className="flex items-start gap-3">
-          <div className="w-10 h-10 rounded-2xl bg-amber-50 text-amber-700 flex items-center justify-center shrink-0">
-            <AlertCircle className="w-5 h-5" aria-hidden="true" />
+      <div className="rounded-[20px] bg-white border-2 border-amber-300 shadow-xs p-4 space-y-3">
+        <div className="flex items-start gap-2.5">
+          <div className="w-9 h-9 rounded-2xl bg-amber-50 text-amber-700 flex items-center justify-center shrink-0">
+            <AlertCircle className="w-4.5 h-4.5" aria-hidden="true" />
           </div>
           <div className="min-w-0">
             <span className="inline-flex px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-800 text-[10px] font-semibold uppercase tracking-wide">
-              Human Approval Required
+              Approval Needed
             </span>
-            <h3 className="text-sm font-bold text-[#1C2B25] mt-1">{pending.title}</h3>
-            <p className="text-xs text-[#6B7B73] mt-1 leading-relaxed">
-              {activeSlotOverride && pending.actionType === 'reschedule_appointment'
-                ? `Move appointment to ${activeSlotOverride.date} at ${activeSlotOverride.time} (${activeSlotOverride.clinician}) and set status to Scheduled.`
-                : pending.summary}
-            </p>
+            <p className="text-sm font-bold text-[#1C2B25] mt-1 leading-snug">{previewSentence}</p>
           </div>
         </div>
 
-        <dl className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs bg-[#FAFBF9] border border-[#DCE8E0] rounded-2xl p-3.5">
+        <dl className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs bg-[#FAFBF9] border border-[#DCE8E0] rounded-2xl p-3">
           {Object.entries(pending.details).map(([k, v]) => {
             const displayValue =
               k === 'Proposed Slot' && activeSlotOverride
                 ? `${activeSlotOverride.date} ${activeSlotOverride.time}`
                 : k === 'Clinician' && activeSlotOverride
                   ? activeSlotOverride.clinician
-                  : String(v ?? '—');
+                  : sanitizeTechnicalText(String(v ?? '—'));
             return (
               <div key={k} className="min-w-0">
                 <dt className="text-[11px] text-[#6B7B73]">{k}</dt>
-                <dd className="font-semibold font-mono text-[11.5px] text-[#1C2B25] mt-0.5 break-words">
+                <dd className="font-semibold text-xs text-[#1C2B25] mt-0.5 break-words">
                   {displayValue}
                 </dd>
               </div>
@@ -653,17 +660,17 @@ export function AssistantView({
             type="button"
             disabled={isWorking}
             onClick={() => handleConfirm(turn)}
-            className="btn-press flex-1 px-4 py-2.5 text-xs font-semibold text-white bg-[#34C38F] hover:bg-[#24B07D] rounded-full transition-colors disabled:opacity-50 whitespace-nowrap"
+            className="btn-press flex-1 min-h-[44px] px-4 py-2 text-xs font-bold text-[#0F3D2E] bg-[#34C38F] hover:bg-[#2bb482] rounded-full transition-colors disabled:opacity-50 whitespace-nowrap"
           >
-            {isWorking ? 'Applying...' : 'Approve'}
+            {isWorking ? 'Saving change…' : 'Approve'}
           </button>
           <button
             type="button"
             disabled={isWorking}
             onClick={() => handleDismiss(pending.confirmationId)}
-            className="btn-press flex-1 px-4 py-2.5 text-xs font-semibold text-[#1C2B25] hover:bg-[#EEF3EF] bg-[#FAFBF9] border border-[#DCE8E0] rounded-full transition-colors whitespace-nowrap"
+            className="btn-press flex-1 min-h-[44px] px-4 py-2 text-xs font-semibold text-[#1C2B25] hover:bg-[#EEF3EF] bg-[#FAFBF9] border border-[#DCE8E0] rounded-full transition-colors whitespace-nowrap"
           >
-            Reject
+            Cancel
           </button>
         </div>
       </div>
@@ -671,66 +678,85 @@ export function AssistantView({
   };
 
   return (
-    <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
-      {/* Center Workspace: Chat Workspace */}
+    <div className="flex-1 min-h-0 flex flex-col lg:flex-row gap-4 lg:h-full">
+      {/* Center Conversation Column */}
       <section
-        aria-label="CareDesk AI Conversational Workspace"
-        className="xl:col-span-8 card-surface rounded-[24px] flex flex-col min-h-[680px]"
+        aria-label="CareDesk Assistant conversation"
+        className="flex-1 min-w-0 min-h-0 card-surface rounded-[24px] flex flex-col overflow-hidden"
       >
-        <div className="px-6 py-4 border-b border-[#EEF3EF] flex flex-wrap items-center justify-between gap-3">
+        {/* Header */}
+        <header className="px-4 sm:px-6 py-3.5 border-b border-[#EEF3EF] flex flex-wrap items-center justify-between gap-2.5 shrink-0 bg-white">
           <div className="flex items-center gap-3 min-w-0">
             <div className="w-10 h-10 rounded-2xl bg-[#0F3D2E] text-[#34C38F] flex items-center justify-center shrink-0">
               <Bot className="w-5 h-5" aria-hidden="true" />
             </div>
             <div className="min-w-0">
-              <h2 className="text-base font-bold text-[#1C2B25] truncate">
+              <h2 className="text-sm sm:text-base font-bold text-[#1C2B25] truncate">
                 {role === 'Patient'
                   ? 'CareDesk Patient Assistant'
                   : role === 'Doctor'
-                    ? 'CareDesk Doctor Copilot'
+                    ? 'CareDesk Doctor Assistant'
                     : 'CareDesk Assistant'}
               </h2>
               <p className="text-xs text-[#6B7B73] truncate">
-                {role} workspace · Live clinic SQLite queries
+                Calm clinic helper grounded in live records
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={() => setShowSavedDrawer((v) => !v)}
-              className="btn-press inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-[#1C2B25] bg-[#FAFBF9] hover:bg-[#EEF3EF] border border-[#DCE8E0] rounded-full"
+              className="btn-press inline-flex items-center gap-1.5 min-h-[40px] sm:min-h-[34px] px-3 py-1.5 text-xs font-semibold text-[#1C2B25] bg-[#FAFBF9] hover:bg-[#EEF3EF] border border-[#DCE8E0] rounded-full"
             >
               <History className="w-3.5 h-3.5 text-[#137A55]" aria-hidden="true" />
-              <span>History ({conversations.length})</span>
+              <span>Past Chats ({conversations.length})</span>
             </button>
             <button
               type="button"
               disabled={loading}
               onClick={handleNewConversation}
-              className="btn-press inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-[#0F3D2E] bg-[#E3F7EF] hover:bg-[#D0EFE3] rounded-full disabled:opacity-50"
+              className="btn-press inline-flex items-center gap-1.5 min-h-[40px] sm:min-h-[34px] px-3 py-1.5 text-xs font-semibold text-[#0F3D2E] bg-[#E3F7EF] hover:bg-[#D0EFE3] rounded-full disabled:opacity-50"
             >
               <MessageSquarePlus className="w-3.5 h-3.5 text-[#137A55]" aria-hidden="true" />
               New Chat
             </button>
+            <button
+              type="button"
+              onClick={() => setWhatIDidOpen((v) => !v)}
+              aria-expanded={whatIDidOpen}
+              className="btn-press inline-flex items-center gap-1.5 min-h-[40px] sm:min-h-[34px] px-3 py-1.5 text-xs font-semibold text-[#0F3D2E] bg-[#EEF3EF] hover:bg-[#DCE8E0] rounded-full"
+            >
+              {whatIDidOpen ? (
+                <PanelRightClose className="w-3.5 h-3.5 text-[#137A55]" aria-hidden="true" />
+              ) : (
+                <PanelRightOpen className="w-3.5 h-3.5 text-[#137A55]" aria-hidden="true" />
+              )}
+              <span>What I did</span>
+              {panelTools.length > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full bg-white text-[10px] font-mono font-bold text-[#137A55]">
+                  {panelTools.length}
+                </span>
+              )}
+            </button>
           </div>
-        </div>
+        </header>
 
-        {/* Collapsible Saved Conversations Bar */}
+        {/* Collapsible Past Conversations Drawer */}
         {showSavedDrawer && (
-          <div className="px-6 py-3.5 bg-[#FAFBF9] border-b border-[#EEF3EF] space-y-2 animate-view-enter">
+          <div className="px-4 sm:px-6 py-3 bg-[#FAFBF9] border-b border-[#EEF3EF] space-y-2 shrink-0 animate-view-enter">
             <div className="text-[11px] font-semibold uppercase tracking-wide text-[#6B7B73]">
               Saved Conversations
             </div>
             {loadingConversations ? (
-              <p className="text-xs text-[#6B7B73]">Loading conversations...</p>
+              <p className="text-xs text-[#6B7B73]">Loading past chats…</p>
             ) : conversations.length === 0 ? (
               <p className="text-xs text-[#6B7B73]">
-                Conversations are automatically saved to your workspace.
+                Your conversations are saved here automatically.
               </p>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-40 overflow-y-auto">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-36 overflow-y-auto">
                 {conversations.map((conv) => {
                   const isSelected = activeConversationId === conv.id;
                   return (
@@ -758,7 +784,7 @@ export function AssistantView({
                         type="button"
                         onClick={() => handleDeleteSavedConversation(conv.id)}
                         aria-label={`Delete conversation ${conv.title}`}
-                        className="p-1 text-[#6B7B73] hover:text-rose-600 shrink-0"
+                        className="p-2 text-[#6B7B73] hover:text-rose-600 shrink-0"
                       >
                         <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
                       </button>
@@ -770,46 +796,54 @@ export function AssistantView({
           </div>
         )}
 
-        {/* Chat Feed */}
+        {/* Scrollable Chat Feed */}
         <div
           ref={feedContainerRef}
-          className="flex-1 px-5 sm:px-7 pt-6 pb-6 overflow-y-auto max-h-[620px]"
+          className="flex-1 min-h-0 px-4 sm:px-6 lg:px-8 py-5 overflow-y-auto"
         >
-          <div className="max-w-3xl mx-auto space-y-6">
+          <div className="max-w-3xl mx-auto space-y-5">
             {turns.length === 0 ? (
               <div className="py-4 sm:py-8 space-y-6 animate-view-enter">
-                <div className="space-y-2 max-w-xl">
-                  <div className="inline-flex px-3 py-1 rounded-full bg-[#E3F7EF] text-[#137A55] text-xs font-semibold">
-                    CareDesk Operations Copilot
+                <div className="rounded-[24px] bg-[#F2F7F3] border border-[#DCE8E0] p-5 sm:p-6 space-y-3">
+                  <div className="flex items-center gap-3">
+                    <span className="w-10 h-10 rounded-2xl bg-[#0F3D2E] text-[#34C38F] flex items-center justify-center shrink-0">
+                      <Bot className="w-5 h-5" aria-hidden="true" />
+                    </span>
+                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white border border-[#DCE8E0] text-[#137A55] text-xs font-semibold">
+                      <Sparkles className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>CareDesk Assistant</span>
+                    </div>
                   </div>
-                  <h3 className="text-xl sm:text-2xl font-bold tracking-tight text-[#1C2B25]">
-                    {getTimeGreeting()}. How can I help manage clinic operations?
+                  <h3 className="text-lg sm:text-2xl font-bold tracking-tight text-[#1C2B25] leading-snug">
+                    {greetingLine}
                   </h3>
-                  <p className="text-sm text-[#6B7B73] leading-relaxed">
-                    Query live patient rosters, doctor schedules, overdue follow-ups, or propose
-                    conflict-free rescheduling with explicit approval.
+                  <p className="text-xs sm:text-sm text-[#43564D] leading-relaxed">
+                    Ask in plain English about today&apos;s schedule, missed visits, overdue
+                    follow-ups, open slots, or rescheduling an appointment.
                   </p>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {welcomeCards.map((card) => (
+                  {suggestionChips.map((chip) => (
                     <button
-                      key={card.title}
+                      key={chip.label}
                       type="button"
                       disabled={loading}
-                      onClick={() => submitPrompt(card.title)}
-                      className="btn-press card-interactive text-left p-4 rounded-2xl border border-[#DCE8E0] bg-[#FAFBF9] hover:bg-[#E3F7EF]/50 space-y-1.5 group"
+                      onClick={() => submitPrompt(chip.label, chip.queryText)}
+                      className="btn-press card-interactive text-left min-h-[56px] px-4 py-3.5 rounded-2xl border border-[#DCE8E0] bg-white hover:bg-[#E3F7EF]/45 flex items-center justify-between gap-3 group"
                     >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-bold text-[#1C2B25] group-hover:text-[#0F3D2E]">
-                          {card.title}
-                        </span>
-                        <ArrowRight
-                          className="w-3.5 h-3.5 text-[#137A55] shrink-0 transition-transform group-hover:translate-x-0.5"
-                          aria-hidden="true"
-                        />
+                      <div className="min-w-0">
+                        <div className="text-xs sm:text-sm font-semibold text-[#1C2B25] group-hover:text-[#0F3D2E]">
+                          {chip.label}
+                        </div>
+                        {chip.hint && (
+                          <div className="text-[11px] text-[#6B7B73] mt-0.5">{chip.hint}</div>
+                        )}
                       </div>
-                      <p className="text-xs text-[#6B7B73]">{card.subtitle}</p>
+                      <ArrowRight
+                        className="w-4 h-4 text-[#137A55] shrink-0 transition-transform group-hover:translate-x-0.5"
+                        aria-hidden="true"
+                      />
                     </button>
                   ))}
                 </div>
@@ -819,11 +853,11 @@ export function AssistantView({
                 if (turn.role === 'user') {
                   return (
                     <div key={turn.id} className="flex justify-end animate-view-enter">
-                      <div className="max-w-xl bg-[#0F3D2E] text-white px-4 py-3 rounded-[20px] rounded-br-sm text-sm space-y-1 shadow-xs">
+                      <div className="max-w-[85%] sm:max-w-xl bg-[#137A55] text-white px-4 py-3 rounded-[20px] rounded-br-sm text-sm space-y-1 shadow-xs">
                         <div className="whitespace-pre-wrap break-words leading-relaxed">
                           {turn.text}
                         </div>
-                        <div className="text-[10px] font-mono text-emerald-200/75 text-right">
+                        <div className="text-[10px] font-mono text-emerald-100/80 text-right">
                           {turn.timestamp}
                         </div>
                       </div>
@@ -836,29 +870,29 @@ export function AssistantView({
                     <div
                       key={turn.id}
                       role="alert"
-                      className="rounded-2xl border border-rose-200 bg-rose-50/75 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-view-enter"
+                      className="rounded-2xl border border-rose-200 bg-rose-50/80 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-view-enter"
                     >
                       <div className="flex items-start gap-2.5">
                         <AlertTriangle
                           className="w-4 h-4 text-rose-600 mt-0.5 shrink-0"
                           aria-hidden="true"
                         />
-                        <div>
-                          <div className="text-xs font-semibold text-rose-950">
-                            {turn.cancelled ? 'Request Stopped' : 'Assistant Request Failed'}
+                        <div className="space-y-0.5">
+                          <div className="text-xs font-bold text-rose-950">
+                            {turn.cancelled ? 'Paused' : "Couldn't complete that check"}
                           </div>
-                          <p className="text-xs text-rose-800 mt-0.5">{turn.text}</p>
+                          <p className="text-xs sm:text-sm text-rose-900">{turn.text}</p>
                         </div>
                       </div>
                       {turn.failedPrompt && (
                         <button
                           type="button"
                           disabled={loading}
-                          onClick={() => submitPrompt(turn.failedPrompt!)}
-                          className="btn-press inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-rose-900 bg-white hover:bg-rose-100 border border-rose-200 rounded-full shrink-0"
+                          onClick={() => submitPrompt(turn.failedPrompt!, turn.failedQueryText)}
+                          className="btn-press inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-0 px-4 py-2 text-xs font-semibold text-rose-900 bg-white hover:bg-rose-100 border border-rose-200 rounded-full shrink-0"
                         >
                           <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
-                          Retry
+                          Try again
                         </button>
                       )}
                     </div>
@@ -868,442 +902,601 @@ export function AssistantView({
                 const res = turn.response;
                 const pending = res?.pendingConfirmation;
                 const isConfirmed =
-                  pending && turn.confirmedActionId === pending.confirmationId;
+                  Boolean(pending) && turn.confirmedActionId === pending?.confirmationId;
                 const isDismissed =
-                  pending && dismissedIds.has(pending.confirmationId);
+                  Boolean(pending) && dismissedIds.has(pending!.confirmationId);
                 const isLatestTurn = turn.id === lastTurnId;
                 const activeSlotOverride = turn.selectedSlotOverride;
+                const isCopied = copiedTurnId === turn.id;
+                const cleanHeadline = sanitizeTechnicalText(res?.headline ?? 'CareDesk Assistant');
+                const cleanSummary = sanitizeTechnicalText(res?.summary || turn.text);
 
                 return (
                   <article
                     key={turn.id}
-                    className="space-y-4 pb-6 border-b border-[#EEF3EF] last:border-b-0 animate-view-enter"
+                    className="flex items-start gap-3 animate-view-enter"
                   >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="w-7 h-7 rounded-xl bg-[#E3F7EF] text-[#137A55] flex items-center justify-center shrink-0">
-                          <Bot className="w-3.5 h-3.5" aria-hidden="true" />
-                        </span>
-                        <h3 className="text-sm font-bold text-[#1C2B25]">
-                          {res?.headline ?? 'CareDesk Assistant'}
-                        </h3>
-                      </div>
-                      <span className="inline-flex items-center gap-1.5 text-[11px] font-mono text-[#6B7B73]">
-                        <Clock className="w-3 h-3" aria-hidden="true" />
-                        {turn.timestamp}
-                      </span>
+                    <div
+                      aria-hidden="true"
+                      className="w-8 h-8 sm:w-9 sm:h-9 rounded-2xl bg-[#0F3D2E] text-[#34C38F] flex items-center justify-center shrink-0 mt-0.5"
+                    >
+                      <Bot className="w-4 h-4" />
                     </div>
 
-                    {res?.markdown ? (
-                      <MarkdownRenderer content={res.markdown} />
-                    ) : (
-                      <p className="text-sm text-[#43564D] leading-relaxed">{turn.text}</p>
-                    )}
-
-                    {res?.sections && res.sections.length > 0 && (
-                      <div className="space-y-3 pt-1">
-                        {res.sections.map((sec) => (
-                          <div key={sec.id} className="space-y-1">
-                            <h4 className="text-xs font-bold text-[#0F3D2E]">{sec.title}</h4>
-                            {sec.body && (
-                              <p className="text-sm text-[#43564D] leading-relaxed">{sec.body}</p>
-                            )}
-                            {sec.bullets && sec.bullets.length > 0 && (
-                              <ul className="space-y-1 pl-4 list-disc text-xs sm:text-sm text-[#43564D]">
-                                {sec.bullets.map((b, bi) => (
-                                  <li key={bi} className="leading-relaxed">
-                                    {b}
-                                  </li>
-                                ))}
-                              </ul>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    {res?.structuredData?.metrics && (
-                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 pt-1">
-                        {Object.entries(res.structuredData.metrics).map(([key, val]) => {
-                          const labelMap: Record<string, string> = {
-                            totalToday: 'Total Today',
-                            confirmed: 'Confirmed',
-                            unconfirmed: 'Unconfirmed',
-                            missedToday: 'Missed Today',
-                            pendingFollowUps: 'Pending Follow-ups',
-                            missedLast7Days: 'Missed (Last 7d)',
-                            totalMissed: 'Total Missed (7d)',
-                            alreadyTracked: 'Already Tracked',
-                            needingTask: 'Needs Follow-up',
-                            totalPending: 'Open Follow-ups',
-                            overdue: 'Overdue Tasks',
-                            highPriority: 'High Priority',
-                            totalAppointments: 'Total Visits',
-                            missedVisits: 'Missed Visits',
-                            openFollowUps: 'Open Follow-ups',
-                          };
-                          return (
-                            <div
-                              key={key}
-                              className="bg-[#FAFBF9] border border-[#DCE8E0] rounded-2xl px-3.5 py-2.5"
-                            >
-                              <div className="text-[11px] text-[#6B7B73]">
-                                {labelMap[key] ?? key.replace(/([A-Z])/g, ' $1').trim()}
-                              </div>
-                              <div className="text-base font-bold font-mono tabular-nums text-[#0F3D2E] mt-0.5">
-                                {val}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-
-                    {res?.structuredData?.type === 'patient_summary' &&
-                      res.structuredData.patient && (
-                        <div className="bg-[#FAFBF9] border border-[#DCE8E0] rounded-2xl p-4 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-                          <div>
-                            <div className="text-[#6B7B73]">Synthetic Patient</div>
-                            <div className="font-semibold text-[#1C2B25] mt-0.5">
-                              {res.structuredData.patient.fullName}
-                            </div>
-                            <div className="font-mono text-[#137A55]">
-                              {res.structuredData.patient.id}
-                            </div>
-                          </div>
-                          <div>
-                            <div className="text-[#6B7B73]">DOB · Registered</div>
-                            <div className="font-mono text-[#1C2B25] mt-0.5">
-                              {res.structuredData.patient.dateOfBirth}
-                            </div>
-                            <div className="font-mono text-[#6B7B73]">
-                              Since {res.structuredData.patient.registrationDate}
-                            </div>
-                          </div>
-                          <div>
-                            <div className="text-[#6B7B73]">Administrative Status</div>
-                            <div className="font-medium text-[#1C2B25] mt-0.5">
-                              {res.structuredData.patient.administrativeStatus}
-                            </div>
-                            <div className="text-[#6B7B73] truncate">
-                              {res.structuredData.patient.email}
-                            </div>
-                          </div>
+                    <div className="flex-1 min-w-0 rounded-[22px] rounded-tl-sm bg-[#F2F7F3] border border-[#DCE8E0] p-4 sm:p-5 space-y-3.5">
+                      {/* One-line answer / headline + copy & timestamp */}
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <h3 className="text-sm font-bold text-[#0F3D2E] leading-snug">
+                            {cleanHeadline}
+                          </h3>
+                          {cleanSummary && cleanSummary !== cleanHeadline && !res?.markdown && (
+                            <p className="text-xs sm:text-sm text-[#1C2B25] leading-relaxed mt-1">
+                              {cleanSummary}
+                            </p>
+                          )}
                         </div>
-                      )}
-
-                    {res?.structuredData?.items &&
-                      res.structuredData.items.length > 0 &&
-                      (res.structuredData.type === 'daily_briefing' ||
-                        res.structuredData.type === 'unconfirmed_appointments' ||
-                        res.structuredData.type === 'missed_appointments' ||
-                        res.structuredData.type === 'followup_plan' ||
-                        res.structuredData.type === 'patient_summary' ||
-                        res.structuredData.type === 'doctor_schedule' ||
-                        res.structuredData.type === 'patient_appointments') && (
-                        <div className="overflow-x-auto bg-white border border-[#DCE8E0] rounded-2xl">
-                          <table className="w-full text-left border-collapse text-xs">
-                            <thead>
-                              <tr className="bg-[#FAFBF9] border-b border-[#DCE8E0] text-[#6B7B73]">
-                                <th className="py-2 px-3">Appt ID</th>
-                                <th className="py-2 px-3">Patient</th>
-                                <th className="py-2 px-3">Date &amp; Time</th>
-                                <th className="py-2 px-3">Department · Clinician</th>
-                                <th className="py-2 px-3">Status</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-[#EEF3EF]">
-                              {(
-                                res.structuredData.items as Array<
-                                  Appointment & { hasOpenFollowUp?: boolean }
-                                >
-                              ).map((item) => (
-                                <tr key={item.id} className="hover:bg-[#FAFBF9]">
-                                  <td className="py-2 px-3 font-mono font-semibold text-[#0F3D2E] whitespace-nowrap">
-                                    {item.id}
-                                  </td>
-                                  <td className="py-2 px-3">
-                                    <span className="font-medium text-[#1C2B25]">
-                                      {item.patientName ?? res.structuredData?.patient?.fullName}
-                                    </span>
-                                    <span className="text-[#6B7B73] font-mono whitespace-nowrap">
-                                      {' '}
-                                      · {item.patientId}
-                                    </span>
-                                  </td>
-                                  <td className="py-2 px-3 font-mono tabular-nums text-[#43564D] whitespace-nowrap">
-                                    {item.appointmentDate} {item.appointmentTime}
-                                  </td>
-                                  <td className="py-2 px-3 text-[#6B7B73]">
-                                    {item.department} · {item.clinician}
-                                  </td>
-                                  <td className="py-2 px-3">
-                                    <AppointmentStatusText status={item.status} />
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-
-                    {res?.structuredData?.items &&
-                      res.structuredData.items.length > 0 &&
-                      res.structuredData.type === 'followup_queue' && (
-                        <div className="overflow-x-auto bg-white border border-[#DCE8E0] rounded-2xl">
-                          <table className="w-full text-left border-collapse text-xs">
-                            <thead>
-                              <tr className="bg-[#FAFBF9] border-b border-[#DCE8E0] text-[#6B7B73]">
-                                <th className="py-2 px-3">Task</th>
-                                <th className="py-2 px-3">Patient</th>
-                                <th className="py-2 px-3">Outreach Description</th>
-                                <th className="py-2 px-3">Due</th>
-                                <th className="py-2 px-3">Priority</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-[#EEF3EF]">
-                              {(res.structuredData.items as FollowUpTask[]).map((task) => (
-                                <tr key={task.id} className="hover:bg-[#FAFBF9]">
-                                  <td className="py-2 px-3 font-mono font-semibold text-[#0F3D2E] whitespace-nowrap">
-                                    {task.id}
-                                  </td>
-                                  <td className="py-2 px-3 whitespace-nowrap">
-                                    <span className="font-medium text-[#1C2B25]">
-                                      {task.patientName ?? task.patientId}
-                                    </span>
-                                    <span className="text-[#6B7B73] font-mono">
-                                      {' '}
-                                      · {task.patientId}
-                                    </span>
-                                  </td>
-                                  <td className="py-2 px-3 text-[#43564D]">{task.description}</td>
-                                  <td className="py-2 px-3 font-mono tabular-nums text-[#43564D] whitespace-nowrap">
-                                    {task.dueDate}
-                                  </td>
-                                  <td className="py-2 px-3 whitespace-nowrap">
-                                    <PriorityText priority={task.priority} />
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-
-                    {res?.structuredData?.items &&
-                      res.structuredData.items.length > 0 &&
-                      (res.structuredData.type === 'available_slots' ||
-                        res.structuredData.type === 'reschedule_proposal') && (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                          {(res.structuredData.items as AvailableSlot[]).map((slot, idx) => {
-                            const isRescheduleSelectable =
-                              res.structuredData?.type === 'reschedule_proposal' &&
-                              pending &&
-                              !isConfirmed &&
-                              !isDismissed;
-                            const isSelectedSlot = activeSlotOverride
-                              ? activeSlotOverride.date === slot.date &&
-                                activeSlotOverride.time === slot.time &&
-                                activeSlotOverride.clinician === slot.clinician
-                              : idx === 0 && isRescheduleSelectable;
-
-                            return isRescheduleSelectable ? (
-                              <button
-                                key={`${slot.date}-${slot.time}-${slot.clinician}-${idx}`}
-                                type="button"
-                                onClick={() =>
-                                  setTurns((prev) =>
-                                    prev.map((t) =>
-                                      t.id === turn.id ? { ...t, selectedSlotOverride: slot } : t
-                                    )
-                                  )
-                                }
-                                className={`btn-press text-left rounded-2xl px-4 py-3 flex items-center justify-between text-xs border transition-colors ${
-                                  isSelectedSlot
-                                    ? 'bg-[#E3F7EF] border-[#34C38F]'
-                                    : 'bg-white border-[#DCE8E0] hover:bg-[#FAFBF9]'
-                                }`}
-                              >
-                                <div>
-                                  <div className="font-mono tabular-nums font-bold text-[#1C2B25]">
-                                    {slot.date} · {slot.time}
-                                  </div>
-                                  <div className="text-[#6B7B73] mt-0.5">
-                                    {slot.department} · {slot.clinician}
-                                  </div>
-                                </div>
-                                <span className="px-2.5 py-0.5 rounded-full bg-white text-[11px] font-semibold text-[#137A55]">
-                                  {isSelectedSlot ? 'Selected' : 'Select'}
-                                </span>
-                              </button>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => handleCopyTurn(turn)}
+                            aria-label="Copy assistant reply"
+                            className="inline-flex items-center gap-1 min-h-[32px] px-2.5 py-1 rounded-full bg-white border border-[#DCE8E0] hover:bg-[#E3F7EF] text-[11px] font-semibold text-[#43564D] transition-colors"
+                          >
+                            {isCopied ? (
+                              <>
+                                <Check className="w-3 h-3 text-[#137A55]" aria-hidden="true" />
+                                <span>Copied</span>
+                              </>
                             ) : (
+                              <>
+                                <Copy className="w-3 h-3" aria-hidden="true" />
+                                <span>Copy</span>
+                              </>
+                            )}
+                          </button>
+                          <span className="inline-flex items-center gap-1 text-[11px] font-mono text-[#6B7B73]">
+                            <Clock className="w-3 h-3" aria-hidden="true" />
+                            {turn.timestamp}
+                          </span>
+                        </div>
+                      </div>
+
+                      {res?.markdown && (
+                        <div className="text-[#1C2B25]">
+                          <MarkdownRenderer content={sanitizeTechnicalText(res.markdown)} />
+                        </div>
+                      )}
+
+                      {res?.sections && res.sections.length > 0 && (
+                        <div className="space-y-2.5">
+                          {res.sections.map((sec) => (
+                            <div
+                              key={sec.id}
+                              className="bg-white/80 border border-[#DCE8E0]/80 rounded-2xl p-3 space-y-1"
+                            >
+                              <h4 className="text-xs font-bold text-[#0F3D2E]">
+                                {sanitizeTechnicalText(sec.title)}
+                              </h4>
+                              {sec.body && (
+                                <p className="text-xs sm:text-sm text-[#43564D] leading-relaxed">
+                                  {sanitizeTechnicalText(sec.body)}
+                                </p>
+                              )}
+                              {sec.bullets && sec.bullets.length > 0 && (
+                                <ul className="space-y-1 pl-4 list-disc text-xs text-[#43564D]">
+                                  {sec.bullets.map((b, bi) => (
+                                    <li key={bi} className="leading-relaxed">
+                                      {sanitizeTechnicalText(b)}
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Mini counts */}
+                      {res?.structuredData?.metrics && (
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                          {Object.entries(res.structuredData.metrics).map(([key, val]) => {
+                            const labelMap: Record<string, string> = {
+                              totalToday: 'Today',
+                              confirmed: 'Confirmed',
+                              unconfirmed: 'Waiting confirmation',
+                              missedToday: 'Missed today',
+                              pendingFollowUps: 'Open follow-ups',
+                              missedLast7Days: 'Missed (7 days)',
+                              totalMissed: 'Missed (7 days)',
+                              alreadyTracked: 'Already tracked',
+                              needingTask: 'Needs outreach',
+                              totalPending: 'Open follow-ups',
+                              overdue: 'Overdue',
+                              highPriority: 'High priority',
+                              totalAppointments: 'Total visits',
+                              missedVisits: 'Missed visits',
+                              openFollowUps: 'Open follow-ups',
+                            };
+                            return (
                               <div
-                                key={`${slot.date}-${slot.time}-${slot.clinician}-${idx}`}
-                                className="bg-[#FAFBF9] border border-[#DCE8E0] rounded-2xl px-4 py-3 flex items-center justify-between text-xs"
+                                key={key}
+                                className="bg-white border border-[#DCE8E0] rounded-2xl px-3 py-2.5"
                               >
-                                <div>
-                                  <div className="font-mono tabular-nums font-bold text-[#1C2B25]">
-                                    {slot.date} · {slot.time}
-                                  </div>
-                                  <div className="text-[#6B7B73] mt-0.5">
-                                    {slot.department} · {slot.clinician}
-                                  </div>
+                                <div className="text-[11px] text-[#6B7B73]">
+                                  {labelMap[key] ?? key.replace(/([A-Z])/g, ' $1').trim()}
                                 </div>
-                                <span className="text-[11px] font-semibold text-[#137A55]">
-                                  Open
-                                </span>
+                                <div className="text-base font-bold font-mono tabular-nums text-[#0F3D2E] mt-0.5">
+                                  {val}
+                                </div>
                               </div>
                             );
                           })}
                         </div>
                       )}
 
-                    {res?.structuredData?.items &&
-                      res.structuredData.items.length > 0 &&
-                      res.structuredData.type === 'doctor_availability' && (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                          {(res.structuredData.items as DoctorAvailabilitySummary[]).map((doc) => (
-                            <div
-                              key={doc.staffId}
-                              className="bg-[#FAFBF9] border border-[#DCE8E0] rounded-2xl p-4 space-y-2 text-xs"
-                            >
-                              <div className="flex items-start justify-between gap-2">
-                                <div>
-                                  <div className="font-bold text-[#1C2B25]">{doc.fullName}</div>
-                                  <div className="text-[#6B7B73]">
-                                    {doc.department} · {doc.specialty}
+                      {/* Patient summary card */}
+                      {res?.structuredData?.type === 'patient_summary' &&
+                        res.structuredData.patient && (
+                          <div className="bg-white border border-[#DCE8E0] rounded-2xl p-3.5 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                            <div>
+                              <div className="text-[#6B7B73]">Patient</div>
+                              <div className="font-semibold text-[#1C2B25] mt-0.5">
+                                {res.structuredData.patient.fullName}
+                              </div>
+                              <div className="font-mono text-[#137A55]">
+                                {res.structuredData.patient.id}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-[#6B7B73]">Date of birth</div>
+                              <div className="font-mono text-[#1C2B25] mt-0.5">
+                                {res.structuredData.patient.dateOfBirth}
+                              </div>
+                              <div className="text-[#6B7B73]">
+                                Registered {res.structuredData.patient.registrationDate}
+                              </div>
+                            </div>
+                            <div className="min-w-0">
+                              <div className="text-[#6B7B73]">Status &amp; Contact</div>
+                              <div className="font-medium text-[#1C2B25] mt-0.5">
+                                {res.structuredData.patient.administrativeStatus}
+                              </div>
+                              <div className="text-[#6B7B73] truncate">
+                                {res.structuredData.patient.email}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                      {/* Read-back confirmation of saved record after Approval */}
+                      {res?.structuredData?.type === 'action_completed' &&
+                        res.structuredData.items &&
+                        res.structuredData.items.length > 0 && (
+                          <div className="rounded-2xl bg-white border-2 border-[#34C38F] p-3.5 space-y-2.5">
+                            <div className="flex items-center gap-2 text-xs font-bold text-[#0F3D2E]">
+                              <CheckCircle2 className="w-4 h-4 text-[#137A55] shrink-0" aria-hidden="true" />
+                              <span>Confirmed saved record</span>
+                            </div>
+                            {(res.structuredData.items as Array<Partial<Appointment & FollowUpTask>>).map(
+                              (item, idx) =>
+                                'appointmentDate' in item && item.appointmentDate ? (
+                                  <div
+                                    key={item.id ?? idx}
+                                    className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs bg-[#FAFBF9] border border-[#EEF3EF] rounded-xl p-2.5"
+                                  >
+                                    <div>
+                                      <span className="text-[10px] text-[#6B7B73] block">Patient</span>
+                                      <span className="font-semibold text-[#1C2B25]">
+                                        {item.patientName ?? item.patientId}
+                                      </span>
+                                    </div>
+                                    <div>
+                                      <span className="text-[10px] text-[#6B7B73] block">New Time</span>
+                                      <span className="font-mono font-semibold text-[#0F3D2E]">
+                                        {item.appointmentDate} · {item.appointmentTime}
+                                      </span>
+                                    </div>
+                                    <div>
+                                      <span className="text-[10px] text-[#6B7B73] block">Department</span>
+                                      <span className="text-[#1C2B25]">
+                                        {item.department} · {item.clinician}
+                                      </span>
+                                    </div>
+                                    <div>
+                                      <span className="text-[10px] text-[#6B7B73] block">Status</span>
+                                      {item.status && <AppointmentStatusText status={item.status} />}
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div
+                                    key={item.id ?? idx}
+                                    className="text-xs bg-[#FAFBF9] border border-[#EEF3EF] rounded-xl p-2.5 flex items-center justify-between gap-2"
+                                  >
+                                    <span className="font-medium text-[#1C2B25]">
+                                      {item.patientName ?? item.patientId}: {item.description}
+                                    </span>
+                                    {item.priority && <PriorityText priority={item.priority} />}
+                                  </div>
+                                )
+                            )}
+                          </div>
+                        )}
+
+                      {/* Appointment rows: mobile stacked cards + desktop table */}
+                      {res?.structuredData?.items &&
+                        res.structuredData.items.length > 0 &&
+                        (res.structuredData.type === 'daily_briefing' ||
+                          res.structuredData.type === 'unconfirmed_appointments' ||
+                          res.structuredData.type === 'missed_appointments' ||
+                          res.structuredData.type === 'followup_plan' ||
+                          res.structuredData.type === 'patient_summary' ||
+                          res.structuredData.type === 'doctor_schedule' ||
+                          res.structuredData.type === 'patient_appointments') && (
+                          <div className="bg-white border border-[#DCE8E0] rounded-2xl overflow-hidden">
+                            <div className="md:hidden divide-y divide-[#EEF3EF]">
+                              {(
+                                res.structuredData.items as Array<
+                                  Appointment & { hasOpenFollowUp?: boolean }
+                                >
+                              ).map((item) => (
+                                <div key={item.id} className="p-3 space-y-1.5 text-xs">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="font-semibold text-[#1C2B25]">
+                                      {item.patientName ?? res.structuredData?.patient?.fullName ?? item.patientId}
+                                    </span>
+                                    <AppointmentStatusText status={item.status} />
+                                  </div>
+                                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-[#6B7B73]">
+                                    <span className="font-mono text-[#0F3D2E]">
+                                      {item.appointmentDate} · {item.appointmentTime}
+                                    </span>
+                                    <span>
+                                      {item.department} · {item.clinician}
+                                    </span>
                                   </div>
                                 </div>
-                                <DoctorDutyStatusText status={doc.effectiveOperationalState} />
-                              </div>
-                              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-[#6B7B73]">
-                                <span>{doc.workingHoursLabel}</span>
-                                <span>
-                                  Load {doc.bookedCount}/{doc.maxDailyCapacity}
-                                </span>
-                              </div>
+                              ))}
                             </div>
-                          ))}
-                        </div>
-                      )}
-
-                    {res?.structuredData?.items &&
-                      res.structuredData.items.length > 0 &&
-                      res.structuredData.type === 'consultation_summary' && (
-                        <div className="space-y-2.5">
-                          {(res.structuredData.items as ConsultationRecord[]).map((rec) => (
-                            <div
-                              key={rec.id}
-                              className="bg-[#FAFBF9] border border-[#DCE8E0] rounded-2xl p-4 space-y-1.5 text-xs"
-                            >
-                              <div className="flex flex-wrap items-center justify-between gap-2">
-                                <span className="font-mono font-semibold text-[#0F3D2E]">
-                                  {rec.consultationDate} · {rec.doctorName}
-                                </span>
-                                <span className="inline-flex items-center gap-1 text-[11px] font-mono text-[#137A55]">
-                                  <FileText className="w-3 h-3" aria-hidden="true" />
-                                  {rec.id}
-                                </span>
-                              </div>
-                              <p className="text-[#1C2B25] leading-relaxed">{rec.summary}</p>
+                            <div className="hidden md:block overflow-x-auto">
+                              <table className="w-full text-left border-collapse text-xs">
+                                <thead>
+                                  <tr className="bg-[#FAFBF9] border-b border-[#DCE8E0] text-[#6B7B73]">
+                                    <th className="py-2 px-3">Patient</th>
+                                    <th className="py-2 px-3">Date &amp; Time</th>
+                                    <th className="py-2 px-3">Department · Clinician</th>
+                                    <th className="py-2 px-3">Status</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-[#EEF3EF]">
+                                  {(
+                                    res.structuredData.items as Array<
+                                      Appointment & { hasOpenFollowUp?: boolean }
+                                    >
+                                  ).map((item) => (
+                                    <tr key={item.id} className="hover:bg-[#FAFBF9]">
+                                      <td className="py-2 px-3">
+                                        <span className="font-medium text-[#1C2B25]">
+                                          {item.patientName ?? res.structuredData?.patient?.fullName}
+                                        </span>
+                                        <span className="text-[#6B7B73] font-mono whitespace-nowrap">
+                                          {' '}
+                                          · {item.patientId}
+                                        </span>
+                                      </td>
+                                      <td className="py-2 px-3 font-mono tabular-nums text-[#43564D] whitespace-nowrap">
+                                        {item.appointmentDate} {item.appointmentTime}
+                                      </td>
+                                      <td className="py-2 px-3 text-[#6B7B73]">
+                                        {item.department} · {item.clinician}
+                                      </td>
+                                      <td className="py-2 px-3">
+                                        <AppointmentStatusText status={item.status} />
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
                             </div>
-                          ))}
+                          </div>
+                        )}
+
+                      {/* Follow-up items: mobile stacked cards + desktop table */}
+                      {res?.structuredData?.items &&
+                        res.structuredData.items.length > 0 &&
+                        res.structuredData.type === 'followup_queue' && (
+                          <div className="bg-white border border-[#DCE8E0] rounded-2xl overflow-hidden">
+                            <div className="md:hidden divide-y divide-[#EEF3EF]">
+                              {(res.structuredData.items as FollowUpTask[]).map((task) => (
+                                <div key={task.id} className="p-3 space-y-1.5 text-xs">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="font-semibold text-[#1C2B25]">
+                                      {task.patientName ?? task.patientId}
+                                    </span>
+                                    <PriorityText priority={task.priority} />
+                                  </div>
+                                  <p className="text-[#43564D]">{task.description}</p>
+                                  <div className="text-[11px] font-mono text-[#6B7B73]">
+                                    Due {task.dueDate}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                            <div className="hidden md:block overflow-x-auto">
+                              <table className="w-full text-left border-collapse text-xs">
+                                <thead>
+                                  <tr className="bg-[#FAFBF9] border-b border-[#DCE8E0] text-[#6B7B73]">
+                                    <th className="py-2 px-3">Patient</th>
+                                    <th className="py-2 px-3">Task</th>
+                                    <th className="py-2 px-3">Due</th>
+                                    <th className="py-2 px-3">Priority</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-[#EEF3EF]">
+                                  {(res.structuredData.items as FollowUpTask[]).map((task) => (
+                                    <tr key={task.id} className="hover:bg-[#FAFBF9]">
+                                      <td className="py-2 px-3 font-medium text-[#1C2B25] whitespace-nowrap">
+                                        {task.patientName ?? task.patientId}
+                                      </td>
+                                      <td className="py-2 px-3 text-[#43564D]">{task.description}</td>
+                                      <td className="py-2 px-3 font-mono tabular-nums text-[#43564D] whitespace-nowrap">
+                                        {task.dueDate}
+                                      </td>
+                                      <td className="py-2 px-3">
+                                        <PriorityText priority={task.priority} />
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
+
+                      {/* Available slots */}
+                      {res?.structuredData?.items &&
+                        res.structuredData.items.length > 0 &&
+                        res.structuredData.type === 'available_slots' && (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                            {(res.structuredData.items as AvailableSlot[]).map((slot, idx) => {
+                              const canSelectForApproval =
+                                pending?.actionType === 'reschedule_appointment' &&
+                                !isConfirmed &&
+                                !isDismissed;
+                              const isSelectedSlot =
+                                activeSlotOverride?.date === slot.date &&
+                                activeSlotOverride?.time === slot.time &&
+                                activeSlotOverride?.clinician === slot.clinician;
+
+                              return canSelectForApproval ? (
+                                <button
+                                  key={`${slot.date}-${slot.time}-${slot.clinician}-${idx}`}
+                                  type="button"
+                                  onClick={() =>
+                                    setTurns((prev) =>
+                                      prev.map((t) =>
+                                        t.id === turn.id ? { ...t, selectedSlotOverride: slot } : t
+                                      )
+                                    )
+                                  }
+                                  className={`btn-press text-left rounded-2xl px-3.5 py-3 flex items-center justify-between text-xs border transition-colors ${
+                                    isSelectedSlot
+                                      ? 'bg-[#E3F7EF] border-[#34C38F]'
+                                      : 'bg-white border-[#DCE8E0] hover:bg-[#FAFBF9]'
+                                  }`}
+                                >
+                                  <div>
+                                    <div className="font-mono tabular-nums font-bold text-[#1C2B25]">
+                                      {slot.date} · {slot.time}
+                                    </div>
+                                    <div className="text-[#6B7B73] mt-0.5">
+                                      {slot.department} · {slot.clinician}
+                                    </div>
+                                  </div>
+                                  <span className="px-2.5 py-0.5 rounded-full bg-[#FAFBF9] border border-[#DCE8E0] text-[11px] font-semibold text-[#137A55]">
+                                    {isSelectedSlot ? 'Selected' : 'Use slot'}
+                                  </span>
+                                </button>
+                              ) : (
+                                <div
+                                  key={`${slot.date}-${slot.time}-${slot.clinician}-${idx}`}
+                                  className="bg-white border border-[#DCE8E0] rounded-2xl px-3.5 py-3 flex items-center justify-between text-xs"
+                                >
+                                  <div>
+                                    <div className="font-mono tabular-nums font-bold text-[#1C2B25]">
+                                      {slot.date} · {slot.time}
+                                    </div>
+                                    <div className="text-[#6B7B73] mt-0.5">
+                                      {slot.department} · {slot.clinician}
+                                    </div>
+                                  </div>
+                                  <span className="px-2.5 py-0.5 rounded-full bg-[#E3F7EF] text-[11px] font-semibold text-[#137A55]">
+                                    Open
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                      {/* Doctor availability cards */}
+                      {res?.structuredData?.items &&
+                        res.structuredData.items.length > 0 &&
+                        res.structuredData.type === 'doctor_availability' && (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                            {(res.structuredData.items as DoctorAvailabilitySummary[]).map((doc) => (
+                              <div
+                                key={doc.staffId}
+                                className="bg-white border border-[#DCE8E0] rounded-2xl p-3.5 space-y-1.5 text-xs"
+                              >
+                                <div className="flex items-start justify-between gap-2">
+                                  <div>
+                                    <div className="font-bold text-[#1C2B25]">{doc.fullName}</div>
+                                    <div className="text-[#6B7B73]">
+                                      {doc.department} · {doc.specialty}
+                                    </div>
+                                  </div>
+                                  <DoctorDutyStatusText status={doc.effectiveOperationalState} />
+                                </div>
+                                <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-[#6B7B73]">
+                                  <span>{doc.workingHoursLabel}</span>
+                                  <span>
+                                    Booked {doc.bookedCount}/{doc.maxDailyCapacity}
+                                  </span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                      {/* Consultation summaries */}
+                      {res?.structuredData?.items &&
+                        res.structuredData.items.length > 0 &&
+                        res.structuredData.type === 'consultation_summary' && (
+                          <div className="space-y-2">
+                            {(res.structuredData.items as ConsultationRecord[]).map((rec) => (
+                              <div
+                                key={rec.id}
+                                className="bg-white border border-[#DCE8E0] rounded-2xl p-3.5 space-y-1 text-xs"
+                              >
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <span className="font-mono font-semibold text-[#0F3D2E]">
+                                    {rec.consultationDate} · {rec.doctorName}
+                                  </span>
+                                  <span className="inline-flex items-center gap-1 text-[11px] font-mono text-[#137A55]">
+                                    <FileText className="w-3 h-3" aria-hidden="true" />
+                                    {rec.id}
+                                  </span>
+                                </div>
+                                <p className="text-[#1C2B25] leading-relaxed">{rec.summary}</p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                      {/* Inline Approval Gate Card */}
+                      {pending && role !== 'Patient' && !isConfirmed && !isDismissed && (
+                        <div>{renderApprovalCard(turn)}</div>
+                      )}
+
+                      {isConfirmed && (
+                        <div className="inline-flex items-center gap-2 px-3.5 py-2 rounded-full bg-[#E3F7EF] text-xs font-semibold text-[#137A55]">
+                          <CheckCircle2 className="w-4 h-4" aria-hidden="true" />
+                          Approved and saved.
                         </div>
                       )}
 
-                    {/* Mobile/Tablet fallback approval card inside chat (on xl+ shown in right panel) */}
-                    {pending && role !== 'Patient' && !isConfirmed && !isDismissed && (
-                      <div className="xl:hidden">{renderApprovalCard(turn)}</div>
-                    )}
-
-                    {isConfirmed && (
-                      <div className="inline-flex items-center gap-2 px-3.5 py-2 rounded-full bg-[#E3F7EF] text-xs font-semibold text-[#137A55]">
-                        <CheckCircle2 className="w-4 h-4" aria-hidden="true" />
-                        Approved and applied to clinic records.
-                      </div>
-                    )}
-
-                    {isDismissed && (
-                      <div className="text-xs text-[#6B7B73]">
-                        Action rejected by administrator. No database records were altered.
-                      </div>
-                    )}
-
-                    {isLatestTurn &&
-                      !loading &&
-                      ((res?.followUpSuggestions && res.followUpSuggestions.length > 0) ||
-                        onNavigateToFiltered) && (
-                        <div className="flex flex-wrap items-center gap-2 pt-1">
-                          {res?.followUpSuggestions?.map((suggestion) => (
-                            <button
-                              key={suggestion}
-                              type="button"
-                              onClick={() => submitPrompt(suggestion)}
-                              className="btn-press px-3.5 py-1.5 text-xs font-semibold text-[#0F3D2E] bg-[#E3F7EF] hover:bg-[#D0EFE3] rounded-full transition-colors"
-                            >
-                              {suggestion}
-                            </button>
-                          ))}
-                          {onNavigateToFiltered &&
-                            (res?.intent === 'daily_briefing' ||
-                              res?.intent === 'unconfirmed_appointments' ||
-                              res?.intent === 'missed_appointments') && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  onNavigateToFiltered({
-                                    tab: 'appointments',
-                                    status:
-                                      res.intent === 'unconfirmed_appointments'
-                                        ? 'Scheduled'
-                                        : res.intent === 'missed_appointments'
-                                          ? 'Missed'
-                                          : 'All',
-                                  })
-                                }
-                                className="btn-press inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-[#43564D] bg-white hover:bg-[#FAFBF9] border border-[#DCE8E0] rounded-full transition-colors"
-                              >
-                                <Calendar className="w-3.5 h-3.5 text-[#137A55]" aria-hidden="true" />
-                                View Appointments
-                              </button>
-                            )}
-                          {onNavigateToFiltered &&
-                            (res?.intent === 'followup_queue' ||
-                              res?.intent === 'prepare_followup_list') && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  onNavigateToFiltered({
-                                    tab: 'followups',
-                                    followUpView: 'pending',
-                                  })
-                                }
-                                className="btn-press inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-[#43564D] bg-white hover:bg-[#FAFBF9] border border-[#DCE8E0] rounded-full transition-colors"
-                              >
-                                Open Follow-ups Queue
-                              </button>
-                            )}
+                      {isDismissed && (
+                        <div className="text-xs text-[#6B7B73]">
+                          Cancelled. No clinic records were changed.
                         </div>
                       )}
+
+                      {/* Suggested Next Action */}
+                      {isLatestTurn &&
+                        !loading &&
+                        ((res?.followUpSuggestions && res.followUpSuggestions.length > 0) ||
+                          onNavigateToFiltered) && (
+                          <div className="flex flex-wrap items-center gap-2 pt-1">
+                            {res?.followUpSuggestions?.map((suggestion) => (
+                              <button
+                                key={suggestion}
+                                type="button"
+                                onClick={() => submitPrompt(suggestion)}
+                                className="btn-press min-h-[38px] sm:min-h-0 px-3.5 py-1.5 text-xs font-semibold text-[#0F3D2E] bg-white hover:bg-[#E3F7EF] border border-[#DCE8E0] rounded-full transition-colors"
+                              >
+                                {suggestion}
+                              </button>
+                            ))}
+                            {onNavigateToFiltered &&
+                              (res?.intent === 'daily_briefing' ||
+                                res?.intent === 'unconfirmed_appointments' ||
+                                res?.intent === 'missed_appointments') && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    onNavigateToFiltered({
+                                      tab: 'appointments',
+                                      status:
+                                        res.intent === 'unconfirmed_appointments'
+                                          ? 'Scheduled'
+                                          : res.intent === 'missed_appointments'
+                                            ? 'Missed'
+                                            : 'All',
+                                    })
+                                  }
+                                  className="btn-press inline-flex items-center gap-1.5 min-h-[38px] sm:min-h-0 px-3.5 py-1.5 text-xs font-semibold text-[#43564D] bg-white hover:bg-[#FAFBF9] border border-[#DCE8E0] rounded-full transition-colors"
+                                >
+                                  <Calendar className="w-3.5 h-3.5 text-[#137A55]" aria-hidden="true" />
+                                  Open Appointments
+                                </button>
+                              )}
+                            {onNavigateToFiltered &&
+                              (res?.intent === 'followup_queue' ||
+                                res?.intent === 'prepare_followup_list') && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    onNavigateToFiltered({
+                                      tab: 'followups',
+                                      followUpView: 'pending',
+                                    })
+                                  }
+                                  className="btn-press inline-flex items-center gap-1.5 min-h-[38px] sm:min-h-0 px-3.5 py-1.5 text-xs font-semibold text-[#43564D] bg-white hover:bg-[#FAFBF9] border border-[#DCE8E0] rounded-full transition-colors"
+                                >
+                                  Open Follow-ups
+                                </button>
+                              )}
+                          </div>
+                        )}
+                    </div>
                   </article>
                 );
               })
             )}
 
+            {/* Live Friendly Steps + Typing Indicator */}
             {loading && (
               <div
-                className="rounded-2xl border border-[#DCE8E0] bg-[#FAFBF9] p-4 space-y-2 animate-view-enter"
+                className="flex items-start gap-3 animate-view-enter"
                 aria-live="polite"
               >
-                <div className="flex items-center gap-2 text-xs font-semibold text-[#0F3D2E]">
-                  <Loader2 className="w-4 h-4 text-[#34C38F] animate-spin shrink-0" aria-hidden="true" />
-                  <span>{streamPhase}</span>
+                <div
+                  aria-hidden="true"
+                  className="w-8 h-8 sm:w-9 sm:h-9 rounded-2xl bg-[#0F3D2E] text-[#34C38F] flex items-center justify-center shrink-0 mt-0.5"
+                >
+                  <Bot className="w-4 h-4" />
                 </div>
-                {streamingText && (
-                  <div className="pt-2 border-t border-[#EEF3EF]">
-                    <MarkdownRenderer content={streamingText} />
+                <div className="flex-1 rounded-[22px] rounded-tl-sm bg-[#F2F7F3] border border-[#DCE8E0] p-4 space-y-2.5">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-semibold text-[#0F3D2E]">
+                    {liveTools.length > 0 ? (
+                      liveTools.map((step, idx) => {
+                        const meta = getFriendlyToolMeta(step.toolName);
+                        const done = step.status === 'executed-via-local-rest';
+                        return (
+                          <span key={step.toolCallId} className="inline-flex items-center gap-1.5">
+                            {idx > 0 && <span className="text-[#6B7B73]">→</span>}
+                            <span className={done ? 'text-[#137A55]' : 'text-[#0F3D2E]'}>
+                              {done ? `${meta.completedStep} ✓` : `${meta.activeStep}…`}
+                            </span>
+                          </span>
+                        );
+                      })
+                    ) : (
+                      <span>Checking clinic records…</span>
+                    )}
+                    <span className="inline-flex items-center gap-1 ml-1" aria-hidden="true">
+                      <span className="typing-dot" />
+                      <span className="typing-dot" />
+                      <span className="typing-dot" />
+                    </span>
                   </div>
-                )}
+                  {streamingText && (
+                    <div className="pt-2 border-t border-[#DCE8E0]/80 text-xs sm:text-sm text-[#1C2B25]">
+                      <MarkdownRenderer content={sanitizeTechnicalText(streamingText)} />
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
@@ -1311,7 +1504,7 @@ export function AssistantView({
           </div>
         </div>
 
-        {/* Multiline Composer */}
+        {/* Persistent Input Bar + Medical Disclaimer */}
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -1321,10 +1514,10 @@ export function AssistantView({
               submitPrompt(input);
             }
           }}
-          className="p-4 border-t border-[#EEF3EF] bg-[#FAFBF9] rounded-b-[24px]"
+          className="px-4 sm:px-6 py-3.5 border-t border-[#EEF3EF] bg-[#FAFBF9] shrink-0"
         >
           <div className="max-w-3xl mx-auto space-y-1.5">
-            <div className="flex items-end gap-2.5 bg-white border border-[#DCE8E0] focus-within:border-[#34C38F] focus-within:ring-2 focus-within:ring-[#34C38F]/20 rounded-[22px] p-2 transition-all">
+            <div className="flex items-end gap-2 bg-white border border-[#DCE8E0] focus-within:border-[#34C38F] focus-within:ring-2 focus-within:ring-[#34C38F]/20 rounded-[22px] p-1.5 sm:p-2 transition-all">
               <label htmlFor="assistant-prompt-input" className="sr-only">
                 Ask CareDesk Assistant
               </label>
@@ -1344,18 +1537,18 @@ export function AssistantView({
                 }}
                 placeholder={
                   role === 'Patient'
-                    ? 'Ask about your next appointment, open slots, or prescriptions...'
+                    ? 'Ask about your next visit or open slots…'
                     : role === 'Doctor'
-                      ? 'Ask about today’s queue, your next patient, or schedule...'
-                      : "Ask for today's briefing, doctor availability, or reschedule P-1042..."
+                      ? "Ask about today's appointments or follow-ups…"
+                      : 'Ask for a briefing, missed visits, open slots, or rescheduling…'
                 }
-                className="flex-1 resize-none px-3 py-2 text-sm bg-transparent border-0 focus:outline-none leading-relaxed max-h-[140px]"
+                className="flex-1 resize-none px-3 py-2 text-sm bg-transparent border-0 focus:outline-none leading-relaxed max-h-[132px]"
               />
               {loading ? (
                 <button
                   type="button"
                   onClick={handleStopGeneration}
-                  className="btn-press inline-flex items-center gap-1.5 px-4 py-2.5 min-h-[40px] text-xs font-semibold text-[#1C2B25] bg-[#EEF3EF] hover:bg-[#DCE8E0] rounded-full transition-colors whitespace-nowrap shrink-0"
+                  className="btn-press inline-flex items-center gap-1.5 min-h-[44px] px-4 py-2 text-xs font-semibold text-[#1C2B25] bg-[#EEF3EF] hover:bg-[#DCE8E0] rounded-full transition-colors whitespace-nowrap shrink-0"
                 >
                   <Square className="w-3.5 h-3.5 fill-current" aria-hidden="true" />
                   Stop
@@ -1364,183 +1557,103 @@ export function AssistantView({
                 <button
                   type="submit"
                   disabled={!input.trim()}
-                  className="btn-press inline-flex items-center gap-1.5 px-5 py-2.5 min-h-[40px] text-xs font-semibold text-white bg-[#34C38F] hover:bg-[#24B07D] rounded-full transition-colors disabled:opacity-45 whitespace-nowrap shrink-0"
+                  className="btn-press inline-flex items-center gap-1.5 min-h-[44px] px-5 py-2 text-xs font-bold text-[#0F3D2E] bg-[#34C38F] hover:bg-[#2bb482] rounded-full transition-colors disabled:opacity-45 whitespace-nowrap shrink-0"
                 >
                   <Send className="w-3.5 h-3.5" aria-hidden="true" />
                   Send
                 </button>
               )}
             </div>
-            <div className="flex items-center justify-between text-[11px] text-[#6B7B73] px-2">
-              <span>Press Enter to send · Shift+Enter for new line</span>
-              <span>
-                {role === 'Patient'
-                  ? 'Verified personal records only'
-                  : 'Confirmation required for schedule mutations'}
+            <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-[#6B7B73] px-2">
+              <span className="font-medium text-[#43564D]">
+                Administrative assistant only. No medical advice.
               </span>
+              <span className="hidden sm:inline">Enter to send · Shift+Enter for new line</span>
             </div>
           </div>
         </form>
       </section>
 
-      {/* Right Rail: Human Approval Card + Tool-Call Status Panel + Prompt Shortcuts */}
-      <aside className="xl:col-span-4 space-y-5">
-        {/* 1. Human Approval Card (Dedicated Right Panel Slot on Desktop) */}
-        {pendingApprovalTurn && role !== 'Patient' ? (
-          <div className="hidden xl:block animate-view-enter">
-            {renderApprovalCard(pendingApprovalTurn)}
-          </div>
-        ) : (
-          <div className="card-surface rounded-[24px] p-5 space-y-2.5">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <ShieldCheck className="w-4 h-4 text-[#137A55]" aria-hidden="true" />
-                <h2 className="text-sm font-bold text-[#1C2B25]">Approval Gate</h2>
-              </div>
-              <span className="px-2.5 py-0.5 rounded-full bg-[#E3F7EF] text-[#137A55] text-[10px] font-semibold">
-                Idle
-              </span>
-            </div>
-            <p className="text-xs text-[#6B7B73] leading-relaxed">
-              {role === 'Patient'
-                ? 'Read-only access scoped to your personal patient records and prescriptions.'
-                : 'Schedule changes proposed by CareDesk Assistant appear here for Approve / Reject sign-off before altering database records.'}
-            </p>
-          </div>
-        )}
-
-        {/* 2. Tool-Call Status Panel */}
-        <section className="card-surface rounded-[24px] p-5 space-y-4">
-          <div className="flex items-center justify-between gap-2">
+      {/* Collapsible Right Panel: "What I did" */}
+      {whatIDidOpen && (
+        <aside
+          aria-label="What I did panel"
+          className="w-full lg:w-[310px] xl:w-[330px] shrink-0 lg:h-full card-surface rounded-[24px] p-4 sm:p-5 flex flex-col gap-4 overflow-y-auto animate-view-enter"
+        >
+          <div className="flex items-center justify-between gap-2 border-b border-[#EEF3EF] pb-3 shrink-0">
             <div className="flex items-center gap-2">
-              <Wrench className="w-4 h-4 text-[#137A55]" aria-hidden="true" />
-              <h2 className="text-sm font-bold text-[#1C2B25]">Tool-Call Status</h2>
+              <ShieldCheck className="w-4 h-4 text-[#137A55]" aria-hidden="true" />
+              <h2 className="text-sm font-bold text-[#1C2B25]">What I did</h2>
             </div>
-            <span className="px-2.5 py-0.5 rounded-full bg-[#EEF3EF] text-[#0F3D2E] text-[10px] font-mono">
-              Local REST · MCP
-            </span>
+            <button
+              type="button"
+              onClick={() => setWhatIDidOpen(false)}
+              aria-label="Collapse What I did panel"
+              className="p-1.5 rounded-full text-[#6B7B73] hover:text-[#1C2B25] hover:bg-[#EEF3EF]"
+            >
+              <PanelRightClose className="w-4 h-4" aria-hidden="true" />
+            </button>
           </div>
 
-          {loading ? (
+          {panelTools.length > 0 ? (
             <div className="space-y-2.5">
-              <div className="flex items-center gap-2 text-xs font-semibold text-[#0F3D2E]">
-                <Loader2 className="w-3.5 h-3.5 text-[#34C38F] animate-spin" aria-hidden="true" />
-                <span>{streamPhase}</span>
-              </div>
-              {liveTools.length > 0 ? (
-                <div className="space-y-2">
-                  {liveTools.map((tool) => (
-                    <div
-                      key={tool.toolCallId}
-                      className="p-3 rounded-2xl bg-[#FAFBF9] border border-[#DCE8E0] text-xs space-y-1"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="font-mono font-semibold text-[#1C2B25] truncate">
-                          {tool.toolName}
-                        </span>
-                        <span
-                          className={`text-[10px] font-mono font-semibold shrink-0 ${
-                            tool.status === 'running'
-                              ? 'text-[#137A55]'
-                              : tool.status === 'failed'
-                                ? 'text-rose-600'
-                                : 'text-[#0F3D2E]'
-                          }`}
-                        >
-                          {tool.status === 'running' ? 'Running...' : `${tool.durationMs ?? 0}ms`}
-                        </span>
-                      </div>
-                      <div className="text-[11px] text-[#6B7B73] truncate">{tool.description}</div>
+              {panelTools.map((tool) => {
+                const meta = getFriendlyToolMeta(tool.toolName);
+                const statusLabel = formatFriendlyToolStatus(tool.status);
+                return (
+                  <div
+                    key={tool.id}
+                    className="p-3.5 rounded-2xl bg-[#FAFBF9] border border-[#DCE8E0] space-y-1.5 text-xs"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-bold text-[#1C2B25] truncate">{meta.label}</span>
+                      <span
+                        className={`px-2 py-0.5 rounded-full border text-[10px] font-semibold shrink-0 ${getToolStatusPillClasses(
+                          tool.status
+                        )}`}
+                      >
+                        {statusLabel}
+                      </span>
                     </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-xs text-[#6B7B73]">Planning clinic database queries...</p>
-              )}
-            </div>
-          ) : latestAssistantTurn?.response?.plannedTools &&
-            latestAssistantTurn.response.plannedTools.length > 0 ? (
-            <div className="space-y-2">
-              {latestAssistantTurn.response.plannedTools.map((tool, i) => (
-                <div
-                  key={`${tool.toolName}-${i}`}
-                  className="p-3 rounded-2xl bg-[#FAFBF9] border border-[#DCE8E0] text-xs space-y-1"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-mono font-semibold text-[#1C2B25] truncate">
-                      {tool.toolName}
-                    </span>
-                    <span
-                      className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold shrink-0 ${
-                        tool.status === 'executed-via-local-rest'
-                          ? 'bg-[#E3F7EF] text-[#137A55]'
-                          : tool.status === 'awaiting-confirmation'
-                            ? 'bg-amber-50 text-amber-800'
-                            : 'bg-rose-50 text-rose-700'
-                      }`}
-                    >
-                      {typeof tool.durationMs === 'number' ? `${tool.durationMs}ms` : tool.status}
-                    </span>
+                    <p className="text-[11px] text-[#43564D] leading-snug">{tool.description}</p>
+                    <div className="text-[10px] font-mono text-[#6B7B73]">{tool.toolName}</div>
                   </div>
-                  <div className="text-[11px] font-mono text-[#6B7B73] truncate">
-                    {tool.endpoint}
-                  </div>
-                  {tool.resultSummary && (
-                    <div className="text-[11px] text-[#43564D] leading-snug">
-                      {tool.resultSummary}
-                    </div>
-                  )}
-                </div>
-              ))}
+                );
+              })}
             </div>
           ) : (
-            <p className="text-xs text-[#6B7B73] leading-relaxed">
-              Send a message to watch real-time REST &amp; MCP tool execution steps and timings.
-            </p>
+            <div className="rounded-2xl bg-[#FAFBF9] border border-dashed border-[#DCE8E0] p-4 space-y-1.5 text-xs">
+              <div className="font-semibold text-[#1C2B25]">No checks run yet</div>
+              <p className="text-[#6B7B73] leading-relaxed">
+                Whenever you ask a question, each real lookup I run in your clinic records appears
+                here in plain English.
+              </p>
+            </div>
           )}
-        </section>
 
-        {/* 3. Prompt Library */}
-        <section className="card-surface rounded-[24px] p-5 space-y-4">
-          <h2 className="text-sm font-bold text-[#1C2B25]">Quick Prompts</h2>
-          <div className="space-y-3.5">
-            {promptGroups.map((group) => (
-              <div key={group.label} className="space-y-1.5">
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-[#6B7B73]">
-                  {group.label}
-                </div>
-                <div className="space-y-1.5">
-                  {group.prompts.map((prompt) => (
-                    <button
-                      key={prompt}
-                      type="button"
-                      disabled={loading}
-                      onClick={() => submitPrompt(prompt)}
-                      className="btn-press w-full text-left px-3.5 py-2 text-xs font-semibold text-[#1C2B25] hover:text-[#0F3D2E] bg-[#FAFBF9] hover:bg-[#E3F7EF]/60 border border-[#DCE8E0]/70 rounded-2xl transition-colors disabled:opacity-50 flex items-center justify-between gap-2"
-                    >
-                      <span className="truncate">{prompt}</span>
-                      <ArrowRight className="w-3.5 h-3.5 text-[#137A55] shrink-0" aria-hidden="true" />
-                    </button>
-                  ))}
-                </div>
+          {turns.length > 0 && (
+            <div className="pt-2 border-t border-[#EEF3EF] space-y-2 mt-auto">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-[#6B7B73]">
+                Try another question
               </div>
-            ))}
-          </div>
-        </section>
-
-        {/* 4. Guardrails */}
-        <section className="rounded-[22px] bg-[#0F3D2E] text-emerald-50 p-5 space-y-2">
-          <div className="flex items-center gap-2 text-xs font-semibold text-[#34C38F]">
-            <ShieldAlert className="w-4 h-4 shrink-0" aria-hidden="true" />
-            <span>Operational Guardrails</span>
-          </div>
-          <ul className="space-y-1 text-xs text-emerald-100/80">
-            <li>• Clinic boundary &amp; role permissions enforced server-side</li>
-            <li>• Grounded strictly in live SQLite clinic records</li>
-            <li>• Confirmation required before modifying bookings</li>
-          </ul>
-        </section>
-      </aside>
+              <div className="space-y-1.5">
+                {suggestionChips.map((chip) => (
+                  <button
+                    key={chip.label}
+                    type="button"
+                    disabled={loading}
+                    onClick={() => submitPrompt(chip.label, chip.queryText)}
+                    className="btn-press w-full text-left px-3 py-2 text-xs font-semibold text-[#1C2B25] hover:text-[#0F3D2E] bg-[#FAFBF9] hover:bg-[#E3F7EF]/60 border border-[#DCE8E0]/80 rounded-xl transition-colors disabled:opacity-50 flex items-center justify-between gap-2"
+                  >
+                    <span className="truncate">{chip.label}</span>
+                    <ArrowRight className="w-3.5 h-3.5 text-[#137A55] shrink-0" aria-hidden="true" />
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </aside>
+      )}
     </div>
   );
 }

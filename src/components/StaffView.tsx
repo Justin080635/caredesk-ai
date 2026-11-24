@@ -15,6 +15,7 @@ import { fetchStaff } from '../client/api';
 import { CLINIC_DEPARTMENTS } from '../shared/constants';
 import type { StaffMember } from '../shared/types';
 import { ClinicEmptyIllustration, EditorialAvatar } from './ClinicIllustrations';
+import { TableSkeleton } from './Skeletons';
 import { DoctorDutyStatusText, StaffStatusText } from './StatusText';
 
 interface StaffViewProps {
@@ -155,10 +156,10 @@ export function StaffView({
         </div>
       </section>
 
-      <div className="card-surface rounded-[24px] p-5">
+      <div className="card-surface rounded-[24px] p-4 sm:p-5">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-2.5 flex-1">
-            <div className="relative flex-1 min-w-[200px] max-w-sm">
+          <div className="flex flex-wrap items-center gap-2.5 flex-1 min-w-0">
+            <div className="relative w-full sm:w-auto sm:flex-1 sm:min-w-[200px] sm:max-w-sm">
               <Search
                 className="w-4 h-4 text-[#6B7B73] absolute left-3.5 top-1/2 -translate-y-1/2"
                 aria-hidden="true"
@@ -172,7 +173,7 @@ export function StaffView({
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search by ID, name, specialty, or role..."
-                className="w-full pl-10 pr-4 py-2 text-sm border border-[#DCE8E0] rounded-full bg-[#FAFBF9] focus:bg-white focus:outline-none focus:border-[#34C38F]"
+                className="w-full min-h-[44px] sm:min-h-0 pl-10 pr-4 py-2 text-sm border border-[#DCE8E0] rounded-full bg-[#FAFBF9] focus:bg-white focus:outline-none focus:border-[#34C38F]"
               />
             </div>
 
@@ -251,18 +252,7 @@ export function StaffView({
         </div>
 
         {loading ? (
-          <div className="p-5 space-y-3" aria-busy="true" aria-label="Loading staff roster">
-            {Array.from({ length: 5 }).map((_, i) => (
-              <div key={i} className="flex items-center gap-3 p-3 rounded-2xl bg-[#FAFBF9] animate-pulse">
-                <div className="w-10 h-10 rounded-full bg-[#DCE8E0] shrink-0" />
-                <div className="flex-1 space-y-1.5">
-                  <div className="h-3.5 w-44 bg-[#DCE8E0] rounded" />
-                  <div className="h-2.5 w-32 bg-[#EEF3EF] rounded" />
-                </div>
-                <div className="h-3.5 w-24 bg-[#DCE8E0] rounded" />
-              </div>
-            ))}
-          </div>
+          <TableSkeleton rows={5} label="Loading staff roster" />
         ) : loadError ? (
           <div className="p-8 text-center space-y-3">
             <AlertTriangle className="w-8 h-8 text-rose-600 mx-auto" aria-hidden="true" />
@@ -303,132 +293,188 @@ export function StaffView({
             )}
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-[#DCE8E0] bg-[#FAFBF9] text-xs font-semibold text-[#6B7B73]">
-                  <th className="py-3 px-5">Staff Member</th>
-                  <th className="py-3 px-4">Role</th>
-                  <th className="py-3 px-4">Department &amp; Specialty</th>
-                  <th className="py-3 px-4">Contact</th>
-                  <th className="py-3 px-4">Caseload</th>
-                  <th className="py-3 px-4">Status</th>
-                  <th className="py-3 px-5 text-right">Profile</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#EEF3EF] text-sm">
-                {staffList.map((member) => (
-                  <tr
-                    key={member.id}
-                    className="hover:bg-[#FAFBF9] transition-colors"
+          <>
+            {/* Mobile Stacked Cards */}
+            <div className="md:hidden divide-y divide-[#EEF3EF]">
+              {staffList.map((member) => (
+                <article key={member.id} className="p-4 space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-3 min-w-0">
+                      {renderStaffAvatar(member)}
+                      <div className="min-w-0">
+                        <button
+                          type="button"
+                          onClick={() => onOpenStaff(member.id)}
+                          className="text-sm font-bold text-[#0F3D2E] hover:underline text-left truncate block"
+                        >
+                          {member.fullName}
+                        </button>
+                        <div className="text-[11px] font-mono text-[#6B7B73]">
+                          {member.id} · {member.role}
+                        </div>
+                      </div>
+                    </div>
+                    <StaffStatusText status={member.status} />
+                  </div>
+
+                  <div className="rounded-2xl bg-[#FAFBF9] border border-[#EEF3EF] p-3 space-y-1 text-xs text-[#6B7B73]">
+                    <div className="font-medium text-[#1C2B25]">
+                      {member.department}
+                      {member.specialty ? ` · ${member.specialty}` : ''}
+                    </div>
+                    {member.email && <div className="truncate">{member.email}</div>}
+                    {member.role === 'Clinician' && (
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                        <span className="font-mono text-[#0F3D2E] font-semibold">
+                          {member.upcomingAppointmentsCount ?? 0} upcoming · {member.assignedAppointmentsCount ?? 0} total
+                        </span>
+                        <DoctorDutyStatusText
+                          status={member.effectiveOperationalState ?? member.attendanceStatus}
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => onOpenStaff(member.id)}
+                    className="btn-press w-full min-h-[44px] inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-full bg-[#EEF3EF] hover:bg-[#DCE8E0] text-xs font-semibold text-[#0F3D2E]"
                   >
-                    <td className={cellPad}>
-                      <div className="flex items-center gap-3">
-                        {renderStaffAvatar(member)}
-                        <div className="min-w-0">
-                          <button
-                            type="button"
-                            onClick={() => onOpenStaff(member.id)}
-                            className="font-semibold text-[#0F3D2E] hover:text-[#137A55] hover:underline text-left"
-                          >
-                            {member.fullName}
-                          </button>
-                          <div className="text-[11px] font-mono text-[#6B7B73]">{member.id}</div>
-                          {member.qualifications && (
-                            <div className="text-[11px] text-[#6B7B73] truncate max-w-[220px]">
-                              {member.qualifications}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </td>
-                    <td className={`${cellPad} text-xs font-medium text-[#1C2B25] whitespace-nowrap`}>
-                      <span className="inline-flex items-center gap-1.5">
-                        {member.role === 'Clinician' ? (
-                          <Stethoscope className="w-3.5 h-3.5 text-[#137A55]" aria-hidden="true" />
-                        ) : (
-                          <Users className="w-3.5 h-3.5 text-[#6B7B73]" aria-hidden="true" />
-                        )}
-                        {member.role}
-                      </span>
-                      {member.licenseNumber && (
-                        <div className="text-[11px] font-mono text-[#6B7B73] mt-0.5">
-                          {member.licenseNumber}
-                        </div>
-                      )}
-                    </td>
-                    <td className={`${cellPad} text-xs`}>
-                      <div className="inline-flex items-center gap-1.5 font-medium text-[#1C2B25]">
-                        <Building2 className="w-3.5 h-3.5 text-[#6B7B73] shrink-0" aria-hidden="true" />
-                        {member.department}
-                      </div>
-                      {member.specialty && (
-                        <div className="text-[11px] text-[#6B7B73] mt-0.5">{member.specialty}</div>
-                      )}
-                    </td>
-                    <td className={`${cellPad} text-xs text-[#6B7B73]`}>
-                      {member.email || member.contactNumber ? (
-                        <div className="space-y-0.5">
-                          {member.email && (
-                            <div className="inline-flex items-center gap-1 text-[#1C2B25]">
-                              <Mail className="w-3 h-3 text-[#137A55]" aria-hidden="true" />
-                              {member.email}
-                            </div>
-                          )}
-                          {member.contactNumber && (
-                            <div className="inline-flex items-center gap-1 font-mono text-[11px] block">
-                              <Phone className="w-3 h-3 text-[#6B7B73]" aria-hidden="true" />
-                              {member.contactNumber}
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        <span className="text-[11px] italic text-[#6B7B73]">Not recorded</span>
-                      )}
-                    </td>
-                    <td className={`${cellPad} text-xs font-mono tabular-nums text-[#1C2B25] whitespace-nowrap`}>
-                      {member.role === 'Clinician' ? (
-                        <div className="space-y-0.5">
-                          <div className="inline-flex items-center gap-1 font-semibold text-[#0F3D2E]">
-                            <Calendar className="w-3 h-3 text-[#137A55]" aria-hidden="true" />
-                            {member.upcomingAppointmentsCount ?? 0} upcoming
-                          </div>
-                          <div className="text-[11px] text-[#6B7B73]">
-                            {member.assignedAppointmentsCount ?? 0} total visits
-                          </div>
-                        </div>
-                      ) : (
-                        <span className="text-[11px] text-[#6B7B73]">Operations role</span>
-                      )}
-                    </td>
-                    <td className={cellPad}>
-                      <div className="space-y-1">
-                        <StaffStatusText status={member.status} />
-                        {member.role === 'Clinician' && (
-                          <div>
-                            <DoctorDutyStatusText
-                              status={member.effectiveOperationalState ?? member.attendanceStatus}
-                            />
-                          </div>
-                        )}
-                      </div>
-                    </td>
-                    <td className={`${cellPad} text-right whitespace-nowrap`}>
-                      <button
-                        type="button"
-                        onClick={() => onOpenStaff(member.id)}
-                        className="btn-press inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-[#EEF3EF] hover:bg-[#DCE8E0] text-xs font-semibold text-[#0F3D2E]"
-                        aria-label={`Open staff profile for ${member.fullName}`}
-                      >
-                        <span>Open Profile</span>
-                        <ArrowUpRight className="w-3.5 h-3.5" aria-hidden="true" />
-                      </button>
-                    </td>
+                    <span>Open Profile</span>
+                    <ArrowUpRight className="w-3.5 h-3.5" aria-hidden="true" />
+                  </button>
+                </article>
+              ))}
+            </div>
+
+            {/* Desktop Table */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="border-b border-[#DCE8E0] bg-[#FAFBF9] text-xs font-semibold text-[#6B7B73]">
+                    <th className="py-3 px-5">Staff Member</th>
+                    <th className="py-3 px-4">Role</th>
+                    <th className="py-3 px-4">Department &amp; Specialty</th>
+                    <th className="py-3 px-4">Contact</th>
+                    <th className="py-3 px-4">Caseload</th>
+                    <th className="py-3 px-4">Status</th>
+                    <th className="py-3 px-5 text-right">Profile</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-[#EEF3EF] text-sm">
+                  {staffList.map((member) => (
+                    <tr
+                      key={member.id}
+                      className="hover:bg-[#FAFBF9] transition-colors"
+                    >
+                      <td className={cellPad}>
+                        <div className="flex items-center gap-3">
+                          {renderStaffAvatar(member)}
+                          <div className="min-w-0">
+                            <button
+                              type="button"
+                              onClick={() => onOpenStaff(member.id)}
+                              className="font-semibold text-[#0F3D2E] hover:text-[#137A55] hover:underline text-left"
+                            >
+                              {member.fullName}
+                            </button>
+                            <div className="text-[11px] font-mono text-[#6B7B73]">{member.id}</div>
+                            {member.qualifications && (
+                              <div className="text-[11px] text-[#6B7B73] truncate max-w-[220px]">
+                                {member.qualifications}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                      <td className={`${cellPad} text-xs font-medium text-[#1C2B25] whitespace-nowrap`}>
+                        <span className="inline-flex items-center gap-1.5">
+                          {member.role === 'Clinician' ? (
+                            <Stethoscope className="w-3.5 h-3.5 text-[#137A55]" aria-hidden="true" />
+                          ) : (
+                            <Users className="w-3.5 h-3.5 text-[#6B7B73]" aria-hidden="true" />
+                          )}
+                          {member.role}
+                        </span>
+                        {member.licenseNumber && (
+                          <div className="text-[11px] font-mono text-[#6B7B73] mt-0.5">
+                            {member.licenseNumber}
+                          </div>
+                        )}
+                      </td>
+                      <td className={`${cellPad} text-xs`}>
+                        <div className="inline-flex items-center gap-1.5 font-medium text-[#1C2B25]">
+                          <Building2 className="w-3.5 h-3.5 text-[#6B7B73] shrink-0" aria-hidden="true" />
+                          {member.department}
+                        </div>
+                        {member.specialty && (
+                          <div className="text-[11px] text-[#6B7B73] mt-0.5">{member.specialty}</div>
+                        )}
+                      </td>
+                      <td className={`${cellPad} text-xs text-[#6B7B73]`}>
+                        {member.email || member.contactNumber ? (
+                          <div className="space-y-0.5">
+                            {member.email && (
+                              <div className="inline-flex items-center gap-1 text-[#1C2B25]">
+                                <Mail className="w-3 h-3 text-[#137A55]" aria-hidden="true" />
+                                {member.email}
+                              </div>
+                            )}
+                            {member.contactNumber && (
+                              <div className="inline-flex items-center gap-1 font-mono text-[11px] block">
+                                <Phone className="w-3 h-3 text-[#6B7B73]" aria-hidden="true" />
+                                {member.contactNumber}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-[11px] italic text-[#6B7B73]">Not recorded</span>
+                        )}
+                      </td>
+                      <td className={`${cellPad} text-xs font-mono tabular-nums text-[#1C2B25] whitespace-nowrap`}>
+                        {member.role === 'Clinician' ? (
+                          <div className="space-y-0.5">
+                            <div className="inline-flex items-center gap-1 font-semibold text-[#0F3D2E]">
+                              <Calendar className="w-3 h-3 text-[#137A55]" aria-hidden="true" />
+                              {member.upcomingAppointmentsCount ?? 0} upcoming
+                            </div>
+                            <div className="text-[11px] text-[#6B7B73]">
+                              {member.assignedAppointmentsCount ?? 0} total visits
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="text-[11px] text-[#6B7B73]">Operations role</span>
+                        )}
+                      </td>
+                      <td className={cellPad}>
+                        <div className="space-y-1">
+                          <StaffStatusText status={member.status} />
+                          {member.role === 'Clinician' && (
+                            <div>
+                              <DoctorDutyStatusText
+                                status={member.effectiveOperationalState ?? member.attendanceStatus}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                      <td className={`${cellPad} text-right whitespace-nowrap`}>
+                        <button
+                          type="button"
+                          onClick={() => onOpenStaff(member.id)}
+                          className="btn-press inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-[#EEF3EF] hover:bg-[#DCE8E0] text-xs font-semibold text-[#0F3D2E]"
+                          aria-label={`Open staff profile for ${member.fullName}`}
+                        >
+                          <span>Open Profile</span>
+                          <ArrowUpRight className="w-3.5 h-3.5" aria-hidden="true" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </section>
     </div>
