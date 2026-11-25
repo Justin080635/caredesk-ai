@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import type { DatabaseSync } from 'node:sqlite';
-import type { AppointmentType } from '../../shared/types';
+import type { AppointmentType, DoctorScope } from '../../shared/types';
 import {
   type AuthenticatedRequest,
   callFirebaseIdentityEndpoint,
@@ -51,6 +51,13 @@ import {
   recordAuditEvent,
 } from '../services/auditService';
 import {
+  assertDoctorCanAccessPatient,
+  assertDoctorOwnsAppointment,
+  assertDoctorOwnsFollowup,
+  assertDoctorTargetsSelf,
+  requireDoctorScope,
+} from '../services/doctorAccessService';
+import {
   addDoctorUnavailability,
   approveDoctorApplication,
   createConsultation,
@@ -72,6 +79,7 @@ import {
 } from '../services/doctorService';
 import {
   createFollowup,
+  getFollowupById,
   getPendingFollowups,
   listFollowups,
   updateFollowupStatus,
@@ -238,6 +246,12 @@ export function createClinicApiRouter(
     requireRole,
   } = createAuthGuards(db, options?.verifyToken);
 
+  function getDoctorScopeIfDoctor(req: AuthenticatedRequest): DoctorScope | undefined {
+    const ctx = req.clinicContext!;
+    if (ctx.membership.role !== 'Doctor') return undefined;
+    return requireDoctorScope(db, ctx);
+  }
+
   function assertDoctorScheduleAccess(req: AuthenticatedRequest, targetStaffId: string) {
     const ctx = req.clinicContext!;
     if (ctx.permissions.canManageStaff) return;
@@ -259,6 +273,9 @@ export function createClinicApiRouter(
           : '';
     if (ctx.membership.role === 'Clinic Administrator' && explicit) {
       return explicit;
+    }
+    if (ctx.membership.role === 'Doctor') {
+      return requireDoctorScope(db, ctx).staffId;
     }
     if (ctx.linkedStaffId) return ctx.linkedStaffId;
     if (explicit && ctx.permissions.canManageStaff) return explicit;
@@ -1151,7 +1168,7 @@ export function createClinicApiRouter(
     }
   );
 
-  // Clinic-Isolated Patients (Staff/Admin Only; Patients get 403)
+  // Clinic-Isolated Patients (Staff/Admin Only; Doctors scoped to assigned caseload; Patients get 403)
   router.get(
     '/patients',
     requireAuthenticatedUser,
@@ -1160,9 +1177,15 @@ export function createClinicApiRouter(
     (req: AuthenticatedRequest, res) => {
       try {
         const clinicId = req.clinicContext!.clinic.id;
+        const doctorScope = getDoctorScopeIfDoctor(req);
         const search = typeof req.query.search === 'string' ? req.query.search : undefined;
         const status = typeof req.query.status === 'string' ? req.query.status : undefined;
-        const patients = listPatients(db, { clinicId, search, status });
+        const patients = listPatients(db, {
+          clinicId,
+          search,
+          status,
+          assignedToDoctor: doctorScope,
+        });
         res.json({ data: patients, meta: { count: patients.length } });
       } catch (err) {
         handleRouteError(res, err);
@@ -1179,10 +1202,24 @@ export function createClinicApiRouter(
       try {
         const ctx = req.clinicContext!;
         const clinicId = ctx.clinic.id;
+        const doctorScope = getDoctorScopeIfDoctor(req);
         const patient = getPatientById(db, String(req.params.id), clinicId);
-        const appointments = listAppointments(db, { clinicId, patientId: patient.id });
-        const followups = listFollowups(db, { clinicId, patientId: patient.id });
-        const consultations = listConsultationsForPatient(db, clinicId, patient.id);
+        if (doctorScope) {
+          assertDoctorCanAccessPatient(db, clinicId, patient.id, doctorScope);
+        }
+        const appointments = listAppointments(db, {
+          clinicId,
+          patientId: patient.id,
+          doctorScope,
+        });
+        const followups = listFollowups(db, {
+          clinicId,
+          patientId: patient.id,
+          doctorScope,
+        });
+        const consultations = listConsultationsForPatient(db, clinicId, patient.id, {
+          doctorScope,
+        });
         const activity = ctx.permissions.canViewAuditHistory
           ? listAuditLogsForPatient(
               db,
@@ -1283,17 +1320,33 @@ export function createClinicApiRouter(
     (req: AuthenticatedRequest, res) => {
       try {
         const clinicId = req.clinicContext!.clinic.id;
+        const doctorScope = getDoctorScopeIfDoctor(req);
+        const requestedStaffId =
+          typeof req.query.staffId === 'string' ? req.query.staffId : undefined;
+        const requestedClinician =
+          typeof req.query.clinician === 'string' ? req.query.clinician : undefined;
+        const requestedPatientId =
+          typeof req.query.patientId === 'string' ? req.query.patientId : undefined;
+
+        if (doctorScope) {
+          assertDoctorTargetsSelf(db, clinicId, doctorScope, requestedStaffId, requestedClinician);
+          if (requestedPatientId && requestedPatientId.trim().length > 0) {
+            assertDoctorCanAccessPatient(db, clinicId, requestedPatientId.trim(), doctorScope);
+          }
+        }
+
         const filters = {
           clinicId,
           date: typeof req.query.date === 'string' ? req.query.date : undefined,
           status: typeof req.query.status === 'string' ? req.query.status : undefined,
           department: typeof req.query.department === 'string' ? req.query.department : undefined,
-          patientId: typeof req.query.patientId === 'string' ? req.query.patientId : undefined,
-          clinician: typeof req.query.clinician === 'string' ? req.query.clinician : undefined,
-          staffId: typeof req.query.staffId === 'string' ? req.query.staffId : undefined,
+          patientId: requestedPatientId,
+          clinician: doctorScope ? undefined : requestedClinician,
+          staffId: doctorScope ? undefined : requestedStaffId,
           requestStatus:
             typeof req.query.requestStatus === 'string' ? req.query.requestStatus : undefined,
           search: typeof req.query.search === 'string' ? req.query.search : undefined,
+          doctorScope,
         };
         const hasPagination =
           req.query.page !== undefined || req.query.pageSize !== undefined;
@@ -1324,7 +1377,8 @@ export function createClinicApiRouter(
     (req: AuthenticatedRequest, res) => {
       try {
         const clinicId = req.clinicContext!.clinic.id;
-        const appointments = getTodaysAppointments(db, undefined, clinicId);
+        const doctorScope = getDoctorScopeIfDoctor(req);
+        const appointments = getTodaysAppointments(db, undefined, clinicId, doctorScope);
         res.json({ data: appointments, meta: { count: appointments.length } });
       } catch (err) {
         handleRouteError(res, err);
@@ -1340,8 +1394,9 @@ export function createClinicApiRouter(
     (req: AuthenticatedRequest, res) => {
       try {
         const clinicId = req.clinicContext!.clinic.id;
+        const doctorScope = getDoctorScopeIfDoctor(req);
         const days = typeof req.query.days === 'string' ? Number(req.query.days) : 7;
-        const appointments = getMissedAppointments(db, { clinicId, days });
+        const appointments = getMissedAppointments(db, { clinicId, days, doctorScope });
         res.json({
           data: appointments,
           meta: { count: appointments.length, lookbackDays: days || 7 },
@@ -1360,7 +1415,8 @@ export function createClinicApiRouter(
     (req: AuthenticatedRequest, res) => {
       try {
         const clinicId = req.clinicContext!.clinic.id;
-        const appointments = getUnconfirmedAppointments(db, undefined, clinicId);
+        const doctorScope = getDoctorScopeIfDoctor(req);
+        const appointments = getUnconfirmedAppointments(db, undefined, clinicId, doctorScope);
         res.json({ data: appointments, meta: { count: appointments.length } });
       } catch (err) {
         handleRouteError(res, err);
@@ -1376,15 +1432,30 @@ export function createClinicApiRouter(
     (req: AuthenticatedRequest, res) => {
       try {
         const clinicId = req.clinicContext!.clinic.id;
+        const doctorScope = getDoctorScopeIfDoctor(req);
+        const requestedStaffId =
+          typeof req.query.staffId === 'string' ? req.query.staffId : undefined;
+        const requestedClinician =
+          typeof req.query.clinician === 'string' ? req.query.clinician : undefined;
+        const requestedPatientId =
+          typeof req.query.patientId === 'string' ? req.query.patientId : undefined;
+
+        if (doctorScope) {
+          assertDoctorTargetsSelf(db, clinicId, doctorScope, requestedStaffId, requestedClinician);
+          if (requestedPatientId && requestedPatientId.trim().length > 0) {
+            assertDoctorCanAccessPatient(db, clinicId, requestedPatientId.trim(), doctorScope);
+          }
+        }
+
         const slots = checkAppointmentAvailability(db, {
           clinicId,
           startDate: typeof req.query.startDate === 'string' ? req.query.startDate : undefined,
           daysCount: typeof req.query.days === 'string' ? Number(req.query.days) : 5,
           department: typeof req.query.department === 'string' ? req.query.department : undefined,
           specialty: typeof req.query.specialty === 'string' ? req.query.specialty : undefined,
-          clinician: typeof req.query.clinician === 'string' ? req.query.clinician : undefined,
-          staffId: typeof req.query.staffId === 'string' ? req.query.staffId : undefined,
-          patientId: typeof req.query.patientId === 'string' ? req.query.patientId : undefined,
+          clinician: doctorScope ? undefined : requestedClinician,
+          staffId: doctorScope ? doctorScope.staffId : requestedStaffId,
+          patientId: requestedPatientId,
           appointmentType:
             typeof req.query.appointmentType === 'string'
               ? (req.query.appointmentType as AppointmentType)
@@ -1410,7 +1481,11 @@ export function createClinicApiRouter(
     (req: AuthenticatedRequest, res) => {
       try {
         const clinicId = req.clinicContext!.clinic.id;
+        const doctorScope = getDoctorScopeIfDoctor(req);
         const appointment = getAppointmentById(db, String(req.params.id), clinicId);
+        if (doctorScope) {
+          assertDoctorOwnsAppointment(db, clinicId, appointment, doctorScope);
+        }
         res.json({ data: appointment });
       } catch (err) {
         handleRouteError(res, err);
@@ -1426,7 +1501,28 @@ export function createClinicApiRouter(
     (req: AuthenticatedRequest, res) => {
       try {
         const ctx = req.clinicContext!;
-        const created = createAppointment(db, req.body, ctx.actorLabel, ctx.clinic.id);
+        const doctorScope = getDoctorScopeIfDoctor(req);
+        let payload = req.body ?? {};
+        if (doctorScope) {
+          const patientId =
+            typeof payload?.patientId === 'string' ? payload.patientId.trim() : '';
+          if (patientId) {
+            assertDoctorCanAccessPatient(db, ctx.clinic.id, patientId, doctorScope);
+          }
+          assertDoctorTargetsSelf(
+            db,
+            ctx.clinic.id,
+            doctorScope,
+            payload?.staffId,
+            payload?.clinician
+          );
+          payload = {
+            ...payload,
+            staffId: doctorScope.staffId,
+            clinician: doctorScope.doctorName,
+          };
+        }
+        const created = createAppointment(db, payload, ctx.actorLabel, ctx.clinic.id);
         res.status(201).json({ data: created });
       } catch (err) {
         handleRouteError(res, err);
@@ -1442,10 +1538,25 @@ export function createClinicApiRouter(
     (req: AuthenticatedRequest, res) => {
       try {
         const ctx = req.clinicContext!;
+        const doctorScope = getDoctorScopeIfDoctor(req);
+        const appointmentId = String(req.params.id);
+        let patch = req.body ?? {};
+        if (doctorScope) {
+          const existing = getAppointmentById(db, appointmentId, ctx.clinic.id);
+          assertDoctorOwnsAppointment(db, ctx.clinic.id, existing, doctorScope);
+          assertDoctorTargetsSelf(db, ctx.clinic.id, doctorScope, patch?.staffId, patch?.clinician);
+          if (patch?.staffId !== undefined || patch?.clinician !== undefined) {
+            patch = {
+              ...patch,
+              staffId: doctorScope.staffId,
+              clinician: doctorScope.doctorName,
+            };
+          }
+        }
         const updated = updateAppointment(
           db,
-          String(req.params.id),
-          req.body,
+          appointmentId,
+          patch,
           ctx.actorLabel,
           ctx.clinic.id
         );
@@ -1486,6 +1597,12 @@ export function createClinicApiRouter(
     (req: AuthenticatedRequest, res) => {
       try {
         const clinicId = req.clinicContext!.clinic.id;
+        const doctorScope = getDoctorScopeIfDoctor(req);
+        const requestedStaffId =
+          typeof req.query.staffId === 'string' ? req.query.staffId.trim() : '';
+        if (doctorScope && requestedStaffId) {
+          assertDoctorTargetsSelf(db, clinicId, doctorScope, requestedStaffId);
+        }
         const list = getClinicDoctorAvailabilitySummary(db, clinicId, {
           date: typeof req.query.date === 'string' ? req.query.date : undefined,
           department: typeof req.query.department === 'string' ? req.query.department : undefined,
@@ -1499,7 +1616,10 @@ export function createClinicApiRouter(
               ? (req.query.timeOfDay as 'morning' | 'afternoon' | 'any')
               : undefined,
         });
-        res.json({ data: list });
+        const scopedList = doctorScope
+          ? list.filter((d) => d.staffId === doctorScope.staffId)
+          : list;
+        res.json({ data: scopedList });
       } catch (err) {
         handleRouteError(res, err);
       }
@@ -1514,7 +1634,12 @@ export function createClinicApiRouter(
     (req: AuthenticatedRequest, res) => {
       try {
         const clinicId = req.clinicContext!.clinic.id;
-        const schedule = getDoctorSchedule(db, clinicId, String(req.params.staffId));
+        const targetStaffId = String(req.params.staffId);
+        const doctorScope = getDoctorScopeIfDoctor(req);
+        if (doctorScope) {
+          assertDoctorTargetsSelf(db, clinicId, doctorScope, targetStaffId);
+        }
+        const schedule = getDoctorSchedule(db, clinicId, targetStaffId);
         res.json({ data: schedule });
       } catch (err) {
         handleRouteError(res, err);
@@ -1554,7 +1679,12 @@ export function createClinicApiRouter(
     (req: AuthenticatedRequest, res) => {
       try {
         const clinicId = req.clinicContext!.clinic.id;
-        const list = listDoctorUnavailability(db, clinicId, String(req.params.staffId));
+        const targetStaffId = String(req.params.staffId);
+        const doctorScope = getDoctorScopeIfDoctor(req);
+        if (doctorScope) {
+          assertDoctorTargetsSelf(db, clinicId, doctorScope, targetStaffId);
+        }
+        const list = listDoctorUnavailability(db, clinicId, targetStaffId);
         res.json({ data: list });
       } catch (err) {
         handleRouteError(res, err);
@@ -1973,10 +2103,16 @@ export function createClinicApiRouter(
     (req: AuthenticatedRequest, res) => {
       try {
         const ctx = req.clinicContext!;
-        const detail = getStaffDetail(db, String(req.params.id), {
+        const targetStaffId = String(req.params.id);
+        const doctorScope = getDoctorScopeIfDoctor(req);
+        if (doctorScope) {
+          assertDoctorTargetsSelf(db, ctx.clinic.id, doctorScope, targetStaffId);
+        }
+        const detail = getStaffDetail(db, targetStaffId, {
           clinicId: ctx.clinic.id,
           isAdministrator: ctx.permissions.canManageStaff,
           canViewAuditHistory: ctx.permissions.canViewAuditHistory,
+          doctorScope,
         });
         res.json({ data: detail });
       } catch (err) {
@@ -2016,15 +2152,28 @@ export function createClinicApiRouter(
     (req: AuthenticatedRequest, res) => {
       try {
         const clinicId = req.clinicContext!.clinic.id;
+        const doctorScope = getDoctorScopeIfDoctor(req);
+        const requestedPatientId =
+          typeof req.query.patientId === 'string' ? req.query.patientId : undefined;
+        const requestedAssignedStaffId =
+          typeof req.query.assignedStaffId === 'string' ? req.query.assignedStaffId : undefined;
+
+        if (doctorScope) {
+          assertDoctorTargetsSelf(db, clinicId, doctorScope, requestedAssignedStaffId);
+          if (requestedPatientId && requestedPatientId.trim().length > 0) {
+            assertDoctorCanAccessPatient(db, clinicId, requestedPatientId.trim(), doctorScope);
+          }
+        }
+
         const followups = listFollowups(db, {
           clinicId,
           status: typeof req.query.status === 'string' ? req.query.status : undefined,
           priority: typeof req.query.priority === 'string' ? req.query.priority : undefined,
-          patientId: typeof req.query.patientId === 'string' ? req.query.patientId : undefined,
-          assignedStaffId:
-            typeof req.query.assignedStaffId === 'string' ? req.query.assignedStaffId : undefined,
+          patientId: requestedPatientId,
+          assignedStaffId: doctorScope ? undefined : requestedAssignedStaffId,
           followupType:
             typeof req.query.followupType === 'string' ? req.query.followupType : undefined,
+          doctorScope,
         });
         res.json({ data: followups, meta: { count: followups.length } });
       } catch (err) {
@@ -2041,7 +2190,8 @@ export function createClinicApiRouter(
     (req: AuthenticatedRequest, res) => {
       try {
         const clinicId = req.clinicContext!.clinic.id;
-        const followups = getPendingFollowups(db, clinicId);
+        const doctorScope = getDoctorScopeIfDoctor(req);
+        const followups = getPendingFollowups(db, clinicId, undefined, doctorScope);
         res.json({ data: followups, meta: { count: followups.length } });
       } catch (err) {
         handleRouteError(res, err);
@@ -2057,7 +2207,41 @@ export function createClinicApiRouter(
     (req: AuthenticatedRequest, res) => {
       try {
         const ctx = req.clinicContext!;
-        const created = createFollowup(db, req.body, ctx.actorLabel, ctx.clinic.id);
+        const doctorScope = getDoctorScopeIfDoctor(req);
+        let payload = req.body ?? {};
+        if (doctorScope) {
+          const patientId =
+            typeof payload?.patientId === 'string' ? payload.patientId.trim() : '';
+          if (patientId) {
+            assertDoctorCanAccessPatient(db, ctx.clinic.id, patientId, doctorScope);
+          }
+          const appointmentId =
+            typeof payload?.appointmentId === 'string' ? payload.appointmentId.trim() : '';
+          if (appointmentId) {
+            const apt = getAppointmentById(db, appointmentId, ctx.clinic.id);
+            if (patientId && apt.patientId !== patientId) {
+              throw new ServiceError(
+                400,
+                'VALIDATION_ERROR',
+                'Appointment does not belong to the selected patient.'
+              );
+            }
+            assertDoctorOwnsAppointment(db, ctx.clinic.id, apt, doctorScope);
+          }
+          assertDoctorTargetsSelf(
+            db,
+            ctx.clinic.id,
+            doctorScope,
+            payload?.assignedStaffId,
+            payload?.assignedToName
+          );
+          payload = {
+            ...payload,
+            assignedStaffId: doctorScope.staffId,
+            assignedToName: doctorScope.doctorName,
+          };
+        }
+        const created = createFollowup(db, payload, ctx.actorLabel, ctx.clinic.id);
         res.status(201).json({ data: created });
       } catch (err) {
         handleRouteError(res, err);
@@ -2073,10 +2257,31 @@ export function createClinicApiRouter(
     (req: AuthenticatedRequest, res) => {
       try {
         const ctx = req.clinicContext!;
+        const doctorScope = getDoctorScopeIfDoctor(req);
+        const followupId = String(req.params.id);
+        let patch = req.body ?? {};
+        if (doctorScope) {
+          const existing = getFollowupById(db, followupId, ctx.clinic.id);
+          assertDoctorOwnsFollowup(db, ctx.clinic.id, existing, doctorScope);
+          assertDoctorTargetsSelf(
+            db,
+            ctx.clinic.id,
+            doctorScope,
+            patch?.assignedStaffId,
+            patch?.assignedToName
+          );
+          if (patch?.assignedStaffId !== undefined || patch?.assignedToName !== undefined) {
+            patch = {
+              ...patch,
+              assignedStaffId: doctorScope.staffId,
+              assignedToName: doctorScope.doctorName,
+            };
+          }
+        }
         const updated = updateFollowupStatus(
           db,
-          String(req.params.id),
-          req.body,
+          followupId,
+          patch,
           ctx.actorLabel,
           ctx.clinic.id
         );
@@ -2087,12 +2292,12 @@ export function createClinicApiRouter(
     }
   );
 
-  // Clinic-Isolated Reports
+  // Clinic-Isolated Reports (Restricted to Clinic Administrators, Receptionists, and Clinic Staff)
   router.get(
     '/reports/daily',
     requireAuthenticatedUser,
     requireClinicAccess,
-    requirePermission('canViewRecords'),
+    requirePermission('canViewClinicReports'),
     (req: AuthenticatedRequest, res) => {
       try {
         const clinicId = req.clinicContext!.clinic.id;
@@ -2109,7 +2314,7 @@ export function createClinicApiRouter(
     '/reports/overview',
     requireAuthenticatedUser,
     requireClinicAccess,
-    requirePermission('canViewRecords'),
+    requirePermission('canViewClinicReports'),
     (req: AuthenticatedRequest, res) => {
       try {
         const clinicId = req.clinicContext!.clinic.id;
@@ -2125,7 +2330,7 @@ export function createClinicApiRouter(
     '/reports/explainable',
     requireAuthenticatedUser,
     requireClinicAccess,
-    requirePermission('canViewRecords'),
+    requirePermission('canViewClinicReports'),
     (req: AuthenticatedRequest, res) => {
       try {
         const clinicId = req.clinicContext!.clinic.id;

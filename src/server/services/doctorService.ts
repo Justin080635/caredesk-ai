@@ -14,6 +14,7 @@ import type {
   DoctorDashboardData,
   DoctorDutyStatus,
   DoctorScheduleDay,
+  DoctorScope,
   DoctorUnavailability,
   FollowUpPriority,
   Patient,
@@ -34,9 +35,17 @@ import {
   isValidEmail,
   isValidTimeString,
 } from '../domain/rules';
-import { listAppointments } from './appointmentService';
+import { getAppointmentById, listAppointments } from './appointmentService';
 import { listAuditLogsForStaff, recordAuditEvent } from './auditService';
-import { listFollowups } from './followupService';
+import {
+  assertDoctorOwnsAppointment,
+  buildDoctorConsultationSql,
+  hasAnyClinicianAssignmentForPatient,
+  hasUniqueClinicianNameInClinic,
+  isPatientAssignedToDoctor,
+  resolveDoctorScopeForStaffId,
+} from './doctorAccessService';
+import { getPendingFollowups, listFollowups } from './followupService';
 import { createNotification, notifyClinicAdmins } from './notificationService';
 import { getPatientById, listPatients, ServiceError } from './patientService';
 import {
@@ -917,12 +926,17 @@ export function listConsultationsForPatient(
   db: DatabaseSync,
   clinicId: string,
   patientId: string,
-  options?: { patientVisibleOnly?: boolean }
+  options?: { patientVisibleOnly?: boolean; doctorScope?: DoctorScope }
 ): ConsultationRecord[] {
   const clauses = ['c.clinic_id = ?', 'c.patient_id = ?'];
   const params: Array<string | number> = [clinicId, patientId];
   if (options?.patientVisibleOnly) {
     clauses.push('c.patient_visible = 1');
+  }
+  if (options?.doctorScope) {
+    const scopePred = buildDoctorConsultationSql(options.doctorScope, 'c');
+    clauses.push(scopePred.sql);
+    params.push(...scopePred.params);
   }
   const rows = db
     .prepare(
@@ -941,16 +955,17 @@ export function listConsultationsByDoctor(
   clinicId: string,
   staffId: string
 ): ConsultationRecord[] {
-  const doctor = getStaffById(db, staffId, clinicId);
+  const scope = resolveDoctorScopeForStaffId(db, clinicId, staffId);
+  const scopePred = buildDoctorConsultationSql(scope, 'c');
   const rows = db
     .prepare(
       `SELECT c.*, p.full_name AS patient_name
        FROM consultations c
        LEFT JOIN patients p ON p.id = c.patient_id AND p.clinic_id = c.clinic_id
-       WHERE c.clinic_id = ? AND (c.staff_id = ? OR LOWER(c.doctor_name) = ?)
+       WHERE c.clinic_id = ? AND ${scopePred.sql}
        ORDER BY c.consultation_date DESC, c.created_at DESC`
     )
-    .all(clinicId, doctor.id, doctor.fullName.toLowerCase()) as Array<Record<string, unknown>>;
+    .all(clinicId, ...scopePred.params) as Array<Record<string, unknown>>;
   return rows.map(mapConsultationRow);
 }
 
@@ -978,6 +993,7 @@ export function createConsultation(
   actor: string
 ): ConsultationRecord {
   const doctor = getStaffById(db, staffId, clinicId);
+  const doctorScope: DoctorScope = { staffId: doctor.id, doctorName: doctor.fullName };
   const patient = getPatientById(db, (input.patientId ?? '').trim(), clinicId);
   const appointmentId = input.appointmentId ? input.appointmentId.trim() : null;
   const consultationDate =
@@ -995,15 +1011,20 @@ export function createConsultation(
     throw new ServiceError(400, 'VALIDATION_ERROR', 'Consultation summary must be at least 4 characters.');
   }
   if (appointmentId) {
-    const apt = db
-      .prepare('SELECT id, patient_id FROM appointments WHERE id = ? AND clinic_id = ?')
-      .get(appointmentId, clinicId) as { id: string; patient_id: string } | undefined;
-    if (!apt) {
-      throw new ServiceError(404, 'APPOINTMENT_NOT_FOUND', `Appointment ${appointmentId} was not found.`);
-    }
-    if (apt.patient_id !== patient.id) {
+    const apt = getAppointmentById(db, appointmentId, clinicId);
+    if (apt.patientId !== patient.id) {
       throw new ServiceError(400, 'VALIDATION_ERROR', 'Appointment does not belong to the selected patient.');
     }
+    assertDoctorOwnsAppointment(db, clinicId, apt, doctorScope);
+  } else if (
+    !isPatientAssignedToDoctor(db, clinicId, patient.id, doctorScope) &&
+    hasAnyClinicianAssignmentForPatient(db, clinicId, patient.id)
+  ) {
+    throw new ServiceError(
+      403,
+      'FORBIDDEN',
+      'You can only document consultations for patients assigned to your clinical caseload.'
+    );
   }
 
   const id = generatePrefixedId(db, 'consultations', 'CON', 4000);
@@ -1124,12 +1145,11 @@ export function getDoctorDashboard(
   staffId: string
 ): DoctorDashboardData {
   const doctor = getStaffById(db, staffId, clinicId);
+  const doctorScope: DoctorScope = { staffId: doctor.id, doctorName: doctor.fullName };
   const todayDate = getClinicTodayDate();
   const currentTime = getClinicCurrentTime();
 
-  const allDoctorAppointments = listAppointments(db, { clinicId }).filter(
-    (a) => a.staffId === doctor.id || a.clinician.toLowerCase() === doctor.fullName.toLowerCase()
-  );
+  const allDoctorAppointments = listAppointments(db, { clinicId, doctorScope });
 
   const todayAppointments = allDoctorAppointments
     .filter((a) => a.appointmentDate === todayDate)
@@ -1145,18 +1165,15 @@ export function getDoctorDashboard(
     todayAppointments.find((a) => a.status === 'Scheduled' || a.status === 'Confirmed') ??
     null;
 
-  const assignedPatientIds = new Set(allDoctorAppointments.map((a) => a.patientId));
-  const openFollowups = listFollowups(db, { clinicId }).filter(
-    (f) => f.status !== 'Completed' && f.status !== 'Cancelled'
-  );
-  const followupsRequiringAttention = openFollowups.filter(
-    (f) => f.assignedStaffId === doctor.id || assignedPatientIds.has(f.patientId)
-  );
-  for (const f of followupsRequiringAttention) {
-    assignedPatientIds.add(f.patientId);
-  }
-
+  const followupsRequiringAttention = getPendingFollowups(db, clinicId, undefined, doctorScope);
   const consultations = listConsultationsByDoctor(db, clinicId, doctor.id);
+
+  const assignedPatientIds = new Set<string>([
+    ...allDoctorAppointments.map((a) => a.patientId),
+    ...followupsRequiringAttention.map((f) => f.patientId),
+    ...consultations.map((c) => c.patientId),
+  ]);
+
   const documentedAppointmentIds = new Set(
     consultations.map((c) => c.appointmentId).filter((id): id is string => Boolean(id))
   );
@@ -1209,50 +1226,45 @@ export function getDoctorPatients(
   }
 > {
   const doctor = getStaffById(db, staffId, clinicId);
+  const doctorScope: DoctorScope = { staffId: doctor.id, doctorName: doctor.fullName };
   const today = getClinicTodayDate();
-  const appointments = listAppointments(db, { clinicId }).filter(
-    (a) => a.staffId === doctor.id || a.clinician.toLowerCase() === doctor.fullName.toLowerCase()
-  );
-  const followups = listFollowups(db, { clinicId, assignedStaffId: doctor.id });
+  const appointments = listAppointments(db, { clinicId, doctorScope });
   const consultations = listConsultationsByDoctor(db, clinicId, doctor.id);
+  const assignedPatients = listPatients(db, {
+    clinicId,
+    search,
+    assignedToDoctor: doctorScope,
+  });
 
-  const patientIds = new Set<string>([
-    ...appointments.map((a) => a.patientId),
-    ...followups.map((f) => f.patientId),
-    ...consultations.map((c) => c.patientId),
-  ]);
-
-  const allPatients = listPatients(db, { clinicId, search });
-  return allPatients
-    .filter((p) => patientIds.has(p.id))
-    .map((p) => {
-      const pApts = appointments.filter((a) => a.patientId === p.id);
-      const pCons = consultations.filter((c) => c.patientId === p.id);
-      const sortedDates = pApts.map((a) => a.appointmentDate).sort((a, b) => b.localeCompare(a));
-      return {
-        ...p,
-        appointmentsCount: pApts.length,
-        upcomingCount: pApts.filter(
-          (a) => a.appointmentDate >= today && (a.status === 'Scheduled' || a.status === 'Confirmed')
-        ).length,
-        lastAppointmentDate: sortedDates[0] ?? null,
-        consultationsCount: pCons.length,
-      };
-    });
+  return assignedPatients.map((p) => {
+    const pApts = appointments.filter((a) => a.patientId === p.id);
+    const pCons = consultations.filter((c) => c.patientId === p.id);
+    const sortedDates = pApts.map((a) => a.appointmentDate).sort((a, b) => b.localeCompare(a));
+    return {
+      ...p,
+      appointmentsCount: pApts.length,
+      upcomingCount: pApts.filter(
+        (a) => a.appointmentDate >= today && (a.status === 'Scheduled' || a.status === 'Confirmed')
+      ).length,
+      lastAppointmentDate: sortedDates[0] ?? null,
+      consultationsCount: pCons.length,
+    };
+  });
 }
 
 export function getDoctorActivity(db: DatabaseSync, clinicId: string, staffId: string) {
   const doctor = getStaffById(db, staffId, clinicId);
-  const appointments = listAppointments(db, { clinicId }).filter(
-    (a) => a.staffId === doctor.id || a.clinician.toLowerCase() === doctor.fullName.toLowerCase()
-  );
+  const doctorScope: DoctorScope = { staffId: doctor.id, doctorName: doctor.fullName };
+  const appointments = listAppointments(db, { clinicId, doctorScope });
+  const hasUniqueName = hasUniqueClinicianNameInClinic(db, clinicId, doctor.id, doctor.fullName);
   return listAuditLogsForStaff(
     db,
     clinicId,
     doctor.id,
     doctor.fullName,
     appointments.map((a) => a.id),
-    60
+    60,
+    { includeActorNameMatch: hasUniqueName }
   );
 }
 

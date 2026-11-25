@@ -123,15 +123,18 @@ export function listAuditLogsForStaff(
   staffId: string,
   staffName: string,
   appointmentIds: string[],
-  limit = 50
+  limit = 50,
+  options?: { includeActorNameMatch?: boolean }
 ): AuditLogEntry[] {
   const safeLimit = Math.min(Math.max(1, Number(limit) || 50), 100);
-  const clauses: string[] = [
-    "(resource_type = 'staff' AND resource_id = ?)",
-    'actor = ?',
-    'actor LIKE ?',
-  ];
-  const params: Array<string | number> = [clinicId, staffId, staffName, `${staffName}%`];
+  const includeNameMatch = options?.includeActorNameMatch !== false;
+  const clauses: string[] = ["(resource_type = 'staff' AND resource_id = ?)"];
+  const params: Array<string | number> = [clinicId, staffId];
+
+  if (includeNameMatch) {
+    clauses.push('actor = ?', 'actor LIKE ?');
+    params.push(staffName, `${staffName}%`);
+  }
 
   if (appointmentIds.length > 0) {
     const placeholders = appointmentIds.map(() => '?').join(', ');

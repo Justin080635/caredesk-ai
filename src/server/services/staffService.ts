@@ -2,6 +2,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import type {
   DoctorDutyStatus,
   DoctorScheduleDay,
+  DoctorScope,
   DoctorUnavailability,
   DoctorVerificationStatus,
   StaffDetail,
@@ -402,13 +403,20 @@ function buildResponsibilitiesForStaff(
 export function getStaffDetail(
   db: DatabaseSync,
   staffId: string,
-  options?: { clinicId?: string; isAdministrator?: boolean; canViewAuditHistory?: boolean }
+  options?: {
+    clinicId?: string;
+    isAdministrator?: boolean;
+    canViewAuditHistory?: boolean;
+    doctorScope?: DoctorScope;
+  }
 ): StaffDetail {
   const clinicId = options?.clinicId ?? DEFAULT_DEMO_CLINIC_ID;
   const staff = getStaffById(db, staffId, clinicId);
   const appointments =
     staff.role === 'Clinician'
-      ? listAppointments(db, { clinicId, clinician: staff.fullName })
+      ? options?.doctorScope
+        ? listAppointments(db, { clinicId, doctorScope: options.doctorScope })
+        : listAppointments(db, { clinicId, clinician: staff.fullName })
       : [];
   const today = getClinicTodayDate();
   const currentTime = getClinicCurrentTime();

@@ -1331,3 +1331,793 @@ test('Option 1 same-origin Firebase proxy routes validate inputs cleanly', async
   });
 });
 
+test('Doctor access isolation enforces caseload-only access across REST endpoints while preserving Admin, Staff, Receptionist, and shared-care workflows', async () => {
+  await withTestServer(async (baseUrl, db) => {
+    await syncUser(baseUrl, 'token-admin-a');
+    const onboardRes = await fetch(`${baseUrl}/api/clinics/onboard`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token-admin-a',
+      },
+      body: JSON.stringify({
+        clinicName: 'Isolation Test Clinic',
+        clinicType: 'Multi-Specialty Outpatient Clinic',
+        contactPhone: '+1-555-0197',
+        contactEmail: 'ops@isolationclinic.org',
+        location: 'Boston, MA',
+        seedSampleData: true,
+      }),
+    });
+    assert.equal(onboardRes.status, 201);
+    const clinicId = ((await onboardRes.json()) as { data: { activeClinic: { id: string } } }).data.activeClinic.id;
+
+    for (const invite of [
+      { email: 'doctor@alphahealth.org', fullName: 'Dr. Priya Patel', role: 'Doctor' },
+      { email: 'reception@alphahealth.org', fullName: 'Jordan Rivera', role: 'Receptionist' },
+      { email: 'staff@alphahealth.org', fullName: 'Samira Haddad', role: 'Clinic Staff' },
+    ]) {
+      const invRes = await fetch(`${baseUrl}/api/clinic/members/invite`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer token-admin-a',
+          'X-Clinic-Id': clinicId,
+        },
+        body: JSON.stringify(invite),
+      });
+      assert.equal(invRes.status, 201);
+    }
+
+    await syncUser(baseUrl, 'token-doctor-a');
+    await syncUser(baseUrl, 'token-reception-a');
+    await syncUser(baseUrl, 'token-staff-a');
+
+    const adminHeaders = { Authorization: 'Bearer token-admin-a', 'X-Clinic-Id': clinicId };
+    const doctorHeaders = { Authorization: 'Bearer token-doctor-a', 'X-Clinic-Id': clinicId };
+    const receptionHeaders = { Authorization: 'Bearer token-reception-a', 'X-Clinic-Id': clinicId };
+    const staffHeaders = { Authorization: 'Bearer token-staff-a', 'X-Clinic-Id': clinicId };
+
+    // Locate seeded records inside Clinic A via Admin
+    const [ptsRes, aptsRes, fusRes, staffListRes] = await Promise.all([
+      fetch(`${baseUrl}/api/patients`, { headers: adminHeaders }),
+      fetch(`${baseUrl}/api/appointments`, { headers: adminHeaders }),
+      fetch(`${baseUrl}/api/followups`, { headers: adminHeaders }),
+      fetch(`${baseUrl}/api/staff`, { headers: adminHeaders }),
+    ]);
+    assert.equal(ptsRes.status, 200);
+    assert.equal(aptsRes.status, 200);
+    assert.equal(fusRes.status, 200);
+    assert.equal(staffListRes.status, 200);
+
+    const allPatients = ((await ptsRes.json()) as { data: Array<{ id: string; fullName: string }> }).data;
+    const allApts = ((await aptsRes.json()) as {
+      data: Array<{ id: string; patientId: string; staffId?: string; clinician: string; status: string }>;
+    }).data;
+    const allFollowups = ((await fusRes.json()) as {
+      data: Array<{ id: string; patientId: string; assignedToName?: string; status: string }>;
+    }).data;
+    const allStaff = ((await staffListRes.json()) as {
+      data: Array<{ id: string; fullName: string; role: string }>;
+    }).data;
+
+    const julian = allPatients.find((p) => p.fullName === 'Julian Mercer');
+    const eleanor = allPatients.find((p) => p.fullName === 'Eleanor Vance');
+    const arthur = allPatients.find((p) => p.fullName === 'Arthur Pendelton');
+    const miriam = allPatients.find((p) => p.fullName === 'Miriam Goldstein');
+    assert.ok(julian && eleanor && arthur && miriam);
+
+    const okaforStaff = allStaff.find((s) => s.fullName === 'Dr. Samuel Okafor');
+    assert.ok(okaforStaff);
+
+    const okaforArthurApt = allApts.find((a) => a.patientId === arthur.id && a.clinician === 'Dr. Samuel Okafor');
+    const patelJulianApt = allApts.find((a) => a.patientId === julian.id && a.clinician === 'Dr. Priya Patel');
+    const okaforFollowup = allFollowups.find((f) => f.patientId === miriam.id && f.assignedToName === 'Dr. Samuel Okafor');
+    const frontDeskFollowup = allFollowups.find((f) => f.assignedToName === 'Front Desk Coordinator');
+    assert.ok(okaforArthurApt && patelJulianApt && okaforFollowup && frontDeskFollowup);
+
+    // 1. GET /api/patients returns only assigned patients (Julian & shared-care Eleanor), never Arthur or Miriam
+    const docPtsRes = await fetch(`${baseUrl}/api/patients`, { headers: doctorHeaders });
+    assert.equal(docPtsRes.status, 200);
+    const docPatients = ((await docPtsRes.json()) as { data: Array<{ id: string }> }).data;
+    const docPatientIds = new Set(docPatients.map((p) => p.id));
+    assert.ok(docPatientIds.has(julian.id));
+    assert.ok(docPatientIds.has(eleanor.id));
+    assert.equal(docPatientIds.has(arthur.id), false);
+    assert.equal(docPatientIds.has(miriam.id), false);
+
+    // 2. GET /api/patients/:id blocks Arthur (403), allows Julian, and scopes shared-care Eleanor
+    const arthurBlockedRes = await fetch(`${baseUrl}/api/patients/${arthur.id}`, { headers: doctorHeaders });
+    assert.equal(arthurBlockedRes.status, 403);
+
+    const julianAllowedRes = await fetch(`${baseUrl}/api/patients/${julian.id}`, { headers: doctorHeaders });
+    assert.equal(julianAllowedRes.status, 200);
+
+    const eleanorSharedRes = await fetch(`${baseUrl}/api/patients/${eleanor.id}`, { headers: doctorHeaders });
+    assert.equal(eleanorSharedRes.status, 200);
+    const eleanorDetail = (await eleanorSharedRes.json()) as {
+      data: {
+        appointments: Array<{ clinician: string }>;
+        consultations: Array<{ doctorName: string }>;
+        followups: Array<{ assignedToName?: string }>;
+      };
+    };
+    assert.ok(eleanorDetail.data.appointments.length >= 1);
+    assert.ok(eleanorDetail.data.appointments.every((a) => a.clinician === 'Dr. Priya Patel'));
+    assert.ok(eleanorDetail.data.consultations.every((c) => c.doctorName === 'Dr. Priya Patel'));
+
+    // 3. Appointment endpoints only expose Dr. Priya Patel's appointments and reject cross-doctor filters/IDs
+    for (const path of ['/api/appointments', '/api/appointments/today', '/api/appointments/missed', '/api/appointments/unconfirmed']) {
+      const r = await fetch(`${baseUrl}${path}`, { headers: doctorHeaders });
+      assert.equal(r.status, 200, `Expected 200 for ${path}`);
+      const list = ((await r.json()) as { data: Array<{ clinician: string }> }).data;
+      assert.ok(list.every((a) => a.clinician === 'Dr. Priya Patel'), `${path} leaked another clinician's appointment`);
+    }
+
+    assert.equal(
+      (await fetch(`${baseUrl}/api/appointments?staffId=${okaforStaff.id}`, { headers: doctorHeaders })).status,
+      403
+    );
+    assert.equal(
+      (await fetch(`${baseUrl}/api/appointments?clinician=${encodeURIComponent('Dr. Samuel Okafor')}`, { headers: doctorHeaders })).status,
+      403
+    );
+    assert.equal(
+      (await fetch(`${baseUrl}/api/appointments?patientId=${arthur.id}`, { headers: doctorHeaders })).status,
+      403
+    );
+    assert.equal(
+      (await fetch(`${baseUrl}/api/appointments/${okaforArthurApt.id}`, { headers: doctorHeaders })).status,
+      403
+    );
+    assert.equal(
+      (
+        await fetch(`${baseUrl}/api/appointments/${okaforArthurApt.id}`, {
+          method: 'PATCH',
+          headers: { ...doctorHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'Cancelled' }),
+        })
+      ).status,
+      403
+    );
+
+    // Doctor cannot book appointments for another clinician or unassigned patient, but can book for own patient
+    const blockedBooking = await fetch(`${baseUrl}/api/appointments`, {
+      method: 'POST',
+      headers: { ...doctorHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        patientId: arthur.id,
+        appointmentDate: getClinicTodayDate(),
+        appointmentTime: '17:00',
+        department: 'General Medicine',
+        clinician: 'Dr. Priya Patel',
+      }),
+    });
+    assert.equal(blockedBooking.status, 403);
+
+    const blockedOtherClinicianBooking = await fetch(`${baseUrl}/api/appointments`, {
+      method: 'POST',
+      headers: { ...doctorHeaders, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        patientId: julian.id,
+        appointmentDate: getClinicTodayDate(),
+        appointmentTime: '17:00',
+        department: 'Cardiology',
+        clinician: 'Dr. Samuel Okafor',
+      }),
+    });
+    assert.equal(blockedOtherClinicianBooking.status, 403);
+
+    // 4. Follow-ups, consultations, staff/schedule lookups & clinic reports isolation
+    for (const fuPath of ['/api/followups', '/api/followups/pending']) {
+      const r = await fetch(`${baseUrl}${fuPath}`, { headers: doctorHeaders });
+      assert.equal(r.status, 200);
+      const fus = ((await r.json()) as { data: Array<{ id: string }> }).data;
+      const fuIds = new Set(fus.map((f) => f.id));
+      assert.equal(fuIds.has(okaforFollowup.id), false);
+      assert.equal(fuIds.has(frontDeskFollowup.id), false);
+    }
+
+    assert.equal(
+      (
+        await fetch(`${baseUrl}/api/followups/${okaforFollowup.id}`, {
+          method: 'PATCH',
+          headers: { ...doctorHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'Completed' }),
+        })
+      ).status,
+      403
+    );
+
+    assert.equal(
+      (
+        await fetch(`${baseUrl}/api/followups`, {
+          method: 'POST',
+          headers: { ...doctorHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            patientId: arthur.id,
+            description: 'Unauthorized outreach attempt',
+            reason: 'Test',
+            priority: 'Medium',
+          }),
+        })
+      ).status,
+      403
+    );
+
+    assert.equal(
+      (
+        await fetch(`${baseUrl}/api/consultations`, {
+          method: 'POST',
+          headers: { ...doctorHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            appointmentId: okaforArthurApt.id,
+            patientId: arthur.id,
+            summary: 'Unauthorized consultation write attempt',
+          }),
+        })
+      ).status,
+      403
+    );
+
+    assert.equal((await fetch(`${baseUrl}/api/staff/${okaforStaff.id}`, { headers: doctorHeaders })).status, 403);
+    assert.equal((await fetch(`${baseUrl}/api/doctors/${okaforStaff.id}/schedule`, { headers: doctorHeaders })).status, 403);
+    assert.equal((await fetch(`${baseUrl}/api/doctors/${okaforStaff.id}/unavailability`, { headers: doctorHeaders })).status, 403);
+    assert.equal((await fetch(`${baseUrl}/api/doctors/availability?staffId=${okaforStaff.id}`, { headers: doctorHeaders })).status, 403);
+
+    // Clinic-wide reports denied for Doctor, intact for Admin, Receptionist, Clinic Staff
+    for (const reportPath of ['/api/reports/daily', '/api/reports/overview', '/api/reports/explainable']) {
+      assert.equal((await fetch(`${baseUrl}${reportPath}`, { headers: doctorHeaders })).status, 403);
+      assert.equal((await fetch(`${baseUrl}${reportPath}`, { headers: adminHeaders })).status, 200);
+      assert.equal((await fetch(`${baseUrl}${reportPath}`, { headers: receptionHeaders })).status, 200);
+      assert.equal((await fetch(`${baseUrl}${reportPath}`, { headers: staffHeaders })).status, 200);
+    }
+
+    // 5. Unlinked Doctor fails closed across clinical endpoints & assistant
+    await syncUser(baseUrl, 'token-candidate-doc');
+    const candUserRow = db
+      .prepare('SELECT id FROM users WHERE firebase_uid = ?')
+      .get('fb-candidate-doc') as { id: string } | undefined;
+    assert.ok(candUserRow);
+    const nowIso = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO clinic_memberships (id, clinic_id, user_id, role, status, created_at, updated_at)
+      VALUES ('MBR-UNLINKED-DOC', ?, ?, 'Doctor', 'Active', ?, ?)
+    `).run(clinicId, candUserRow.id, nowIso, nowIso);
+
+    const unlinkedHeaders = { Authorization: 'Bearer token-candidate-doc', 'X-Clinic-Id': clinicId };
+    assert.equal((await fetch(`${baseUrl}/api/patients`, { headers: unlinkedHeaders })).status, 403);
+    assert.equal((await fetch(`${baseUrl}/api/appointments`, { headers: unlinkedHeaders })).status, 403);
+    assert.equal((await fetch(`${baseUrl}/api/followups`, { headers: unlinkedHeaders })).status, 403);
+    assert.equal((await fetch(`${baseUrl}/api/doctor/dashboard`, { headers: unlinkedHeaders })).status, 403);
+    assert.equal(
+      (
+        await fetch(`${baseUrl}/api/assistant/query`, {
+          method: 'POST',
+          headers: { ...unlinkedHeaders, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt: 'What is my schedule today?' }),
+        })
+      ).status,
+      403
+    );
+  });
+});
+
+test('Doctor Copilot HTTP endpoints isolate reads, block clinic-wide prompts, and protect cross-clinician writes on confirm', async () => {
+  await withTestServer(async (baseUrl) => {
+    await syncUser(baseUrl, 'token-admin-a');
+    const onboardRes = await fetch(`${baseUrl}/api/clinics/onboard`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token-admin-a',
+      },
+      body: JSON.stringify({
+        clinicName: 'Copilot Isolation Clinic',
+        clinicType: 'Outpatient Clinic',
+        contactPhone: '+1-555-0198',
+        contactEmail: 'ops@copilotiso.org',
+        location: 'Seattle, WA',
+        seedSampleData: true,
+      }),
+    });
+    assert.equal(onboardRes.status, 201);
+    const clinicId = ((await onboardRes.json()) as { data: { activeClinic: { id: string } } }).data.activeClinic.id;
+
+    const invRes = await fetch(`${baseUrl}/api/clinic/members/invite`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token-admin-a',
+        'X-Clinic-Id': clinicId,
+      },
+      body: JSON.stringify({ email: 'doctor@alphahealth.org', fullName: 'Dr. Priya Patel', role: 'Doctor' }),
+    });
+    assert.equal(invRes.status, 201);
+    await syncUser(baseUrl, 'token-doctor-a');
+
+    const adminHeaders = { Authorization: 'Bearer token-admin-a', 'X-Clinic-Id': clinicId };
+    const doctorHeaders = {
+      Authorization: 'Bearer token-doctor-a',
+      'X-Clinic-Id': clinicId,
+      'Content-Type': 'application/json',
+    };
+
+    const allPatients = ((await (await fetch(`${baseUrl}/api/patients`, { headers: adminHeaders })).json()) as {
+      data: Array<{ id: string; fullName: string }>;
+    }).data;
+    const allApts = ((await (await fetch(`${baseUrl}/api/appointments`, { headers: adminHeaders })).json()) as {
+      data: Array<{ id: string; patientId: string; clinician: string; appointmentTime: string }>;
+    }).data;
+
+    const arthur = allPatients.find((p) => p.fullName === 'Arthur Pendelton')!;
+    const julian = allPatients.find((p) => p.fullName === 'Julian Mercer')!;
+    const okaforArthurApt = allApts.find((a) => a.patientId === arthur.id && a.clinician === 'Dr. Samuel Okafor')!;
+    const patelJulianApt = allApts.find((a) => a.patientId === julian.id && a.clinician === 'Dr. Priya Patel')!;
+
+    // 1. Clinic-wide prompt without 'my' refuses rather than falling through to Admin daily briefing
+    const briefingRes = await fetch(`${baseUrl}/api/assistant/query`, {
+      method: 'POST',
+      headers: doctorHeaders,
+      body: JSON.stringify({ prompt: "Give me today's clinic briefing." }),
+    });
+    assert.equal(briefingRes.status, 200);
+    const briefingJson = (await briefingRes.json()) as { data: { intent: string; headline: string } };
+    assert.equal(briefingJson.data.intent, 'non_clinical_refusal');
+    assert.equal(briefingJson.data.headline, 'Doctor Scope Only');
+
+    // 2. Streaming endpoint enforces same Doctor refusal
+    const streamRes = await fetch(`${baseUrl}/api/assistant/stream`, {
+      method: 'POST',
+      headers: doctorHeaders,
+      body: JSON.stringify({ prompt: 'Which doctors are available today?' }),
+    });
+    assert.equal(streamRes.status, 200);
+    const streamText = await streamRes.text();
+    assert.ok(streamText.includes('Doctor Scope Only'));
+
+    // 3. Other doctor's patient lookup & reschedule are blocked without returning data or confirmation
+    const otherLookup = await fetch(`${baseUrl}/api/assistant/query`, {
+      method: 'POST',
+      headers: doctorHeaders,
+      body: JSON.stringify({ prompt: `Show patient ${arthur.id}` }),
+    });
+    assert.equal(otherLookup.status, 200);
+    const otherLookupJson = (await otherLookup.json()) as {
+      data: { intent: string; headline: string; pendingConfirmation?: unknown };
+    };
+    assert.equal(otherLookupJson.data.intent, 'non_clinical_refusal');
+    assert.equal(otherLookupJson.data.pendingConfirmation, undefined);
+
+    const otherResched = await fetch(`${baseUrl}/api/assistant/query`, {
+      method: 'POST',
+      headers: doctorHeaders,
+      body: JSON.stringify({ prompt: `Reschedule patient ${arthur.id}` }),
+    });
+    assert.equal(otherResched.status, 200);
+    const otherReschedJson = (await otherResched.json()) as {
+      data: { intent: string; headline: string; pendingConfirmation?: unknown };
+    };
+    assert.equal(otherReschedJson.data.intent, 'non_clinical_refusal');
+    assert.equal(otherReschedJson.data.pendingConfirmation, undefined);
+
+    // 4. Forged /api/assistant/confirm against another doctor's appointment returns 403 and preserves appointment
+    const forgedConfirm = await fetch(`${baseUrl}/api/assistant/confirm`, {
+      method: 'POST',
+      headers: doctorHeaders,
+      body: JSON.stringify({
+        actionType: 'reschedule_appointment',
+        payload: {
+          appointmentId: okaforArthurApt.id,
+          appointmentDate: getClinicTodayDate(),
+          appointmentTime: '16:00',
+        },
+      }),
+    });
+    assert.equal(forgedConfirm.status, 403);
+
+    // 5. Doctor's own assigned patient reschedule proposes & confirms cleanly
+    const ownResched = await fetch(`${baseUrl}/api/assistant/query`, {
+      method: 'POST',
+      headers: doctorHeaders,
+      body: JSON.stringify({ prompt: `Reschedule patient ${julian.id}` }),
+    });
+    assert.equal(ownResched.status, 200);
+    const ownReschedJson = (await ownResched.json()) as {
+      data: {
+        intent: string;
+        pendingConfirmation?: {
+          actionType: string;
+          payload: { appointmentId: string; appointmentDate: string; appointmentTime: string };
+        };
+      };
+    };
+    assert.equal(ownReschedJson.data.intent, 'reschedule_patient');
+    assert.equal(ownReschedJson.data.pendingConfirmation?.payload.appointmentId, patelJulianApt.id);
+
+    const validConfirm = await fetch(`${baseUrl}/api/assistant/confirm`, {
+      method: 'POST',
+      headers: doctorHeaders,
+      body: JSON.stringify({
+        actionType: ownReschedJson.data.pendingConfirmation!.actionType,
+        payload: ownReschedJson.data.pendingConfirmation!.payload,
+      }),
+    });
+    assert.equal(validConfirm.status, 200);
+  });
+});
+
+test('Correction 1A: ambiguous unlinked/legacy clinician names fail closed while unique legacy and linked identities remain intact', async () => {
+  await withTestServer(async (baseUrl, db) => {
+    const today = getClinicTodayDate();
+    const nowIso = new Date().toISOString();
+
+    // 1. Admin onboards Clinic A (no sample seed data) and invites Dr. Priya Patel & a second clinician
+    await syncUser(baseUrl, 'token-admin-a');
+    const onboardRes = await fetch(`${baseUrl}/api/clinics/onboard`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer token-admin-a' },
+      body: JSON.stringify({
+        clinicName: 'Legacy Identity Hardening Clinic',
+        clinicType: 'Multi-Specialty Outpatient Clinic',
+        contactPhone: '+1-555-0210',
+        contactEmail: 'ops@legacyclinic.org',
+        location: 'Denver, CO',
+        seedSampleData: false,
+      }),
+    });
+    assert.equal(onboardRes.status, 201);
+    const clinicId = ((await onboardRes.json()) as { data: { activeClinic: { id: string } } }).data.activeClinic.id;
+
+    // Also create Clinic B to confirm cross-clinic tenancy stays isolated
+    await syncUser(baseUrl, 'token-admin-b');
+    const onboardB = await fetch(`${baseUrl}/api/clinics/onboard`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer token-admin-b' },
+      body: JSON.stringify({
+        clinicName: 'Tenant B Clinic',
+        clinicType: 'Outpatient Clinic',
+        contactPhone: '+1-555-0299',
+        contactEmail: 'ops@tenantb.org',
+        location: 'Miami, FL',
+        seedSampleData: false,
+      }),
+    });
+    assert.equal(onboardB.status, 201);
+    const clinicBId = ((await onboardB.json()) as { data: { activeClinic: { id: string } } }).data.activeClinic.id;
+
+    for (const invite of [
+      { email: 'doctor@alphahealth.org', fullName: 'Dr. Priya Patel', role: 'Doctor' },
+      { email: 'dr.nadia@alphahealth.org', fullName: 'Dr. Elena Rostova', role: 'Doctor' },
+    ]) {
+      const invRes = await fetch(`${baseUrl}/api/clinic/members/invite`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer token-admin-a',
+          'X-Clinic-Id': clinicId,
+        },
+        body: JSON.stringify(invite),
+      });
+      assert.equal(invRes.status, 201);
+    }
+
+    const patelSync = await syncUser(baseUrl, 'token-doctor-a');
+    assert.equal(patelSync.status, 200);
+    const patelSession = (await patelSync.json()) as {
+      data: { linkedStaff: { id: string; fullName: string } | null };
+    };
+    const patelLinkedStaffId = patelSession.data.linkedStaff!.id;
+
+    const rostovaSync = await syncUser(baseUrl, 'token-candidate-doc', { fullName: 'Dr. Elena Rostova' });
+    assert.equal(rostovaSync.status, 200);
+    const rostovaSession = (await rostovaSync.json()) as {
+      data: { linkedStaff: { id: string; fullName: string } | null };
+    };
+    const rostovaLinkedStaffId = rostovaSession.data.linkedStaff!.id;
+
+    // Seed TWO distinct unlinked Clinician rows with identical lowercase name "dr. priya patel"
+    db.prepare(`
+      INSERT INTO staff (
+        id, clinic_id, user_id, full_name, role, department, specialty, email, contact_number,
+        status, attendance_status, default_appointment_duration, max_daily_capacity, verification_status, created_at, updated_at
+      ) VALUES
+        ('STF-AMB-1', ?, NULL, 'Dr. Priya Patel', 'Clinician', 'General Medicine', 'Primary Care', 'priya1@legacy.org', '+1-555-1001', 'Active', 'On Duty', 30, 16, 'Approved', ?, ?),
+        ('STF-AMB-2', ?, NULL, 'dr. priya patel', 'Clinician', 'Cardiology', 'Preventive', 'priya2@legacy.org', '+1-555-1002', 'Active', 'On Duty', 30, 16, 'Approved', ?, ?),
+        ('STF-LEG-UNIQ', ?, NULL, 'dr. elena rostova', 'Clinician', 'Neurology', 'Neurology', 'elena.legacy@legacy.org', '+1-555-1003', 'Active', 'On Duty', 30, 16, 'Approved', ?, ?)
+    `).run(clinicId, nowIso, nowIso, clinicId, nowIso, nowIso, clinicId, nowIso, nowIso);
+
+    // Register 6 patients in Clinic A via Admin
+    const adminHeaders = {
+      'Content-Type': 'application/json',
+      Authorization: 'Bearer token-admin-a',
+      'X-Clinic-Id': clinicId,
+    };
+    async function createPt(fullName: string, email: string): Promise<string> {
+      const r = await fetch(`${baseUrl}/api/patients`, {
+        method: 'POST',
+        headers: adminHeaders,
+        body: JSON.stringify({
+          fullName,
+          dateOfBirth: '1986-05-10',
+          contactNumber: '+1-555-0300',
+          email,
+        }),
+      });
+      assert.equal(r.status, 201);
+      return ((await r.json()) as { data: { id: string } }).data.id;
+    }
+
+    const ptPatelOwn = await createPt('Patel Linked Patient', 'pt.own@example.org');
+    const ptAmb1 = await createPt('Ambiguous Legacy One', 'pt.amb1@example.org');
+    const ptAmb2 = await createPt('Ambiguous Legacy Two', 'pt.amb2@example.org');
+    const ptAmbNull = await createPt('Ambiguous Null Staff', 'pt.ambnull@example.org');
+    const ptRostovaLegacy = await createPt('Rostova Unique Legacy', 'pt.rosleg@example.org');
+    const ptRostovaNull = await createPt('Rostova Null Staff', 'pt.rosnull@example.org');
+
+    // Link patient portal account for ptPatelOwn via verified claim code to verify Patient isolation stays intact
+    const portalUserSync = await syncUser(baseUrl, 'token-patient-one');
+    assert.equal(portalUserSync.status, 200);
+    const ptUserRow = db
+      .prepare('SELECT id FROM users WHERE firebase_uid = ?')
+      .get('fb-patient-one') as { id: string };
+    db.prepare('UPDATE patients SET linked_user_id = ?, portal_linked_at = ? WHERE id = ? AND clinic_id = ?')
+      .run(ptUserRow.id, nowIso, ptPatelOwn, clinicId);
+    db.prepare(`
+      INSERT INTO clinic_memberships (id, clinic_id, user_id, role, status, created_at, updated_at)
+      VALUES ('MBR-PT-LEG', ?, ?, 'Patient', 'Active', ?, ?)
+    `).run(clinicId, ptUserRow.id, nowIso, nowIso);
+
+    // Insert appointments, consultations, follow-ups, and an audit log for each identity
+    db.prepare(`
+      INSERT INTO appointments (
+        id, clinic_id, patient_id, staff_id, appointment_date, appointment_time, duration_minutes,
+        department, specialty, appointment_type, clinician, status, requested_by, request_status, request_notes, notes, created_at, updated_at
+      ) VALUES
+        ('APT-OWN-1', ?, ?, ?, ?, '09:00', 30, 'General Medicine', 'General Medicine', 'Consultation', 'Dr. Priya Patel', 'Confirmed', 'staff', 'None', '', 'Linked own visit', ?, ?),
+        ('APT-AMB-1', ?, ?, 'STF-AMB-1', ?, '09:30', 30, 'General Medicine', 'Primary Care', 'Consultation', 'Dr. Priya Patel', 'Scheduled', 'staff', 'None', '', 'Unlinked doctor 1 visit', ?, ?),
+        ('APT-AMB-2', ?, ?, 'STF-AMB-2', ?, '10:00', 30, 'Cardiology', 'Preventive', 'Consultation', 'dr. priya patel', 'Confirmed', 'staff', 'None', '', 'Unlinked doctor 2 visit', ?, ?),
+        ('APT-AMB-NULL', ?, ?, NULL, ?, '10:30', 30, 'General Medicine', 'General Medicine', 'Consultation', 'Dr. Priya Patel', 'Missed', 'staff', 'None', '', 'Ambiguous null staff_id visit', ?, ?),
+        ('APT-LEG-1', ?, ?, 'STF-LEG-UNIQ', ?, '11:00', 30, 'Neurology', 'Neurology', 'Consultation', 'dr. elena rostova', 'Confirmed', 'staff', 'None', '', 'Unique legacy staff visit', ?, ?),
+        ('APT-LEG-NULL', ?, ?, NULL, ?, '11:30', 30, 'Neurology', 'Neurology', 'Consultation', 'Dr. Elena Rostova', 'Scheduled', 'staff', 'None', '', 'Unique legacy null staff_id visit', ?, ?)
+    `).run(
+      clinicId, ptPatelOwn, patelLinkedStaffId, today, nowIso, nowIso,
+      clinicId, ptAmb1, today, nowIso, nowIso,
+      clinicId, ptAmb2, today, nowIso, nowIso,
+      clinicId, ptAmbNull, today, nowIso, nowIso,
+      clinicId, ptRostovaLegacy, today, nowIso, nowIso,
+      clinicId, ptRostovaNull, today, nowIso, nowIso
+    );
+
+    db.prepare(`
+      INSERT INTO consultations (
+        id, clinic_id, appointment_id, patient_id, staff_id, doctor_name, consultation_date,
+        summary, diagnosis_notes, recommendations, prescriptions_json, test_results_json, patient_visible, created_at, updated_at
+      ) VALUES
+        ('CON-OWN-1', ?, 'APT-OWN-1', ?, ?, 'Dr. Priya Patel', ?, 'Linked own consultation.', '', '', '[]', '[]', 1, ?, ?),
+        ('CON-AMB-1', ?, 'APT-AMB-1', ?, 'STF-AMB-1', 'Dr. Priya Patel', ?, 'Ambiguous clinician 1 note.', '', '', '[]', '[]', 1, ?, ?),
+        ('CON-AMB-NULL', ?, 'APT-AMB-NULL', ?, NULL, 'Dr. Priya Patel', ?, 'Ambiguous null-staff note.', '', '', '[]', '[]', 1, ?, ?),
+        ('CON-LEG-1', ?, 'APT-LEG-1', ?, 'STF-LEG-UNIQ', 'dr. elena rostova', ?, 'Unique legacy consultation.', '', '', '[]', '[]', 1, ?, ?),
+        ('CON-LEG-NULL', ?, 'APT-LEG-NULL', ?, NULL, 'Dr. Elena Rostova', ?, 'Unique null-staff consultation.', '', '', '[]', '[]', 1, ?, ?)
+    `).run(
+      clinicId, ptPatelOwn, patelLinkedStaffId, today, nowIso, nowIso,
+      clinicId, ptAmb1, today, nowIso, nowIso,
+      clinicId, ptAmbNull, today, nowIso, nowIso,
+      clinicId, ptRostovaLegacy, today, nowIso, nowIso,
+      clinicId, ptRostovaNull, today, nowIso, nowIso
+    );
+
+    db.prepare(`
+      INSERT INTO followups (
+        id, clinic_id, patient_id, appointment_id, followup_type, assigned_staff_id, assigned_to_name,
+        description, reason, priority, created_date, due_date, status,
+        completed_at, completed_by, completion_notes, created_at, updated_at
+      ) VALUES
+        ('FU-OWN-1', ?, ?, 'APT-OWN-1', 'Clinical Recommendation', ?, 'Dr. Priya Patel', 'Linked own follow-up', 'Own check', 'Medium', ?, ?, 'Pending', NULL, '', '', ?, ?),
+        ('FU-AMB-1', ?, ?, 'APT-AMB-1', 'Clinical Recommendation', 'STF-AMB-1', 'Dr. Priya Patel', 'Ambiguous 1 follow-up', 'Amb 1', 'High', ?, ?, 'Pending', NULL, '', '', ?, ?),
+        ('FU-AMB-2', ?, ?, 'APT-AMB-2', 'Clinical Recommendation', 'STF-AMB-2', 'dr. priya patel', 'Ambiguous 2 follow-up', 'Amb 2', 'High', ?, ?, 'Pending', NULL, '', '', ?, ?),
+        ('FU-AMB-NULL', ?, ?, 'APT-AMB-NULL', 'Clinical Recommendation', NULL, 'Dr. Priya Patel', 'Ambiguous null follow-up', 'Amb null', 'High', ?, ?, 'Pending', NULL, '', '', ?, ?),
+        ('FU-LEG-1', ?, ?, 'APT-LEG-1', 'Clinical Recommendation', 'STF-LEG-UNIQ', 'dr. elena rostova', 'Unique legacy follow-up', 'Legacy 1', 'Medium', ?, ?, 'Pending', NULL, '', '', ?, ?),
+        ('FU-LEG-NULL', ?, ?, 'APT-LEG-NULL', 'Clinical Recommendation', NULL, 'Dr. Elena Rostova', 'Unique legacy null follow-up', 'Legacy null', 'Low', ?, ?, 'Pending', NULL, '', '', ?, ?)
+    `).run(
+      clinicId, ptPatelOwn, patelLinkedStaffId, today, today, nowIso, nowIso,
+      clinicId, ptAmb1, today, today, nowIso, nowIso,
+      clinicId, ptAmb2, today, today, nowIso, nowIso,
+      clinicId, ptAmbNull, today, today, nowIso, nowIso,
+      clinicId, ptRostovaLegacy, today, today, nowIso, nowIso,
+      clinicId, ptRostovaNull, today, today, nowIso, nowIso
+    );
+
+    // Insert an audit log authored by the ambiguous unlinked clinician name on an unrelated appointment
+    db.prepare(`
+      INSERT INTO audit_logs (clinic_id, actor, action, resource_type, resource_id, summary, created_at)
+      VALUES (?, 'Dr. Priya Patel (Legacy)', 'UPDATE_APPOINTMENT', 'appointment', 'APT-AMB-1', 'Ambiguous clinician audit entry', ?)
+    `).run(clinicId, nowIso);
+
+    const patelHeaders = {
+      'Content-Type': 'application/json',
+      Authorization: 'Bearer token-doctor-a',
+      'X-Clinic-Id': clinicId,
+    };
+    const rostovaHeaders = {
+      'Content-Type': 'application/json',
+      Authorization: 'Bearer token-candidate-doc',
+      'X-Clinic-Id': clinicId,
+    };
+
+    // A. Ambiguous identity ("Dr. Priya Patel" with 2 unlinked rows) MUST fail closed while keeping linked access intact
+    const patelPts = ((await (await fetch(`${baseUrl}/api/patients`, { headers: patelHeaders })).json()) as {
+      data: Array<{ id: string }>;
+    }).data.map((p) => p.id);
+    assert.deepEqual(patelPts, [ptPatelOwn]);
+
+    assert.equal((await fetch(`${baseUrl}/api/patients/${ptPatelOwn}`, { headers: patelHeaders })).status, 200);
+    assert.equal((await fetch(`${baseUrl}/api/patients/${ptAmb1}`, { headers: patelHeaders })).status, 403);
+    assert.equal((await fetch(`${baseUrl}/api/patients/${ptAmb2}`, { headers: patelHeaders })).status, 403);
+    assert.equal((await fetch(`${baseUrl}/api/patients/${ptAmbNull}`, { headers: patelHeaders })).status, 403);
+
+    const patelApts = ((await (await fetch(`${baseUrl}/api/appointments`, { headers: patelHeaders })).json()) as {
+      data: Array<{ id: string }>;
+    }).data.map((a) => a.id);
+    assert.deepEqual(patelApts, ['APT-OWN-1']);
+
+    assert.equal((await fetch(`${baseUrl}/api/appointments/APT-OWN-1`, { headers: patelHeaders })).status, 200);
+    for (const blockedAptId of ['APT-AMB-1', 'APT-AMB-2', 'APT-AMB-NULL']) {
+      assert.equal((await fetch(`${baseUrl}/api/appointments/${blockedAptId}`, { headers: patelHeaders })).status, 403);
+      assert.equal(
+        (
+          await fetch(`${baseUrl}/api/appointments/${blockedAptId}`, {
+            method: 'PATCH',
+            headers: patelHeaders,
+            body: JSON.stringify({ status: 'Cancelled' }),
+          })
+        ).status,
+        403
+      );
+    }
+
+    const patelFus = ((await (await fetch(`${baseUrl}/api/followups`, { headers: patelHeaders })).json()) as {
+      data: Array<{ id: string }>;
+    }).data.map((f) => f.id);
+    assert.deepEqual(patelFus, ['FU-OWN-1']);
+    assert.equal(
+      (
+        await fetch(`${baseUrl}/api/followups/FU-AMB-1`, {
+          method: 'PATCH',
+          headers: patelHeaders,
+          body: JSON.stringify({ status: 'Completed' }),
+        })
+      ).status,
+      403
+    );
+
+    const patelCons = ((await (await fetch(`${baseUrl}/api/doctor/consultations`, { headers: patelHeaders })).json()) as {
+      data: Array<{ id: string }>;
+    }).data.map((c) => c.id);
+    assert.deepEqual(patelCons, ['CON-OWN-1']);
+
+    assert.equal(
+      (
+        await fetch(`${baseUrl}/api/consultations`, {
+          method: 'POST',
+          headers: patelHeaders,
+          body: JSON.stringify({
+            appointmentId: 'APT-AMB-1',
+            patientId: ptAmb1,
+            summary: 'Should not document ambiguous clinician visit.',
+          }),
+        })
+      ).status,
+      403
+    );
+
+    // GET /api/staff/:ownId, /api/doctor/activity, and /api/doctor/dashboard must NOT leak ambiguous clinicians' appointments or audit logs
+    const ownStaffRes = await fetch(`${baseUrl}/api/staff/${patelLinkedStaffId}`, { headers: patelHeaders });
+    assert.equal(ownStaffRes.status, 200);
+    const ownStaffJson = (await ownStaffRes.json()) as { data: { appointments: Array<{ id: string }> } };
+    assert.deepEqual(ownStaffJson.data.appointments.map((a) => a.id), ['APT-OWN-1']);
+
+    const actRes = await fetch(`${baseUrl}/api/doctor/activity`, { headers: patelHeaders });
+    assert.equal(actRes.status, 200);
+    const actLogs = ((await actRes.json()) as { data: Array<{ resourceId: string; summary: string }> }).data;
+    assert.equal(actLogs.some((l) => l.resourceId === 'APT-AMB-1'), false);
+
+    // Direct targeting of ambiguous unlinked staff rows fails closed (403)
+    assert.equal((await fetch(`${baseUrl}/api/staff/STF-AMB-1`, { headers: patelHeaders })).status, 403);
+    assert.equal((await fetch(`${baseUrl}/api/staff/STF-AMB-2`, { headers: patelHeaders })).status, 403);
+    assert.equal((await fetch(`${baseUrl}/api/doctors/STF-AMB-1/schedule`, { headers: patelHeaders })).status, 403);
+    assert.equal((await fetch(`${baseUrl}/api/doctors/STF-AMB-2/unavailability`, { headers: patelHeaders })).status, 403);
+    assert.equal((await fetch(`${baseUrl}/api/appointments?staffId=STF-AMB-1`, { headers: patelHeaders })).status, 403);
+
+    // Doctor Copilot refuses ambiguous legacy patient lookup & forged confirm
+    const copilotAmbRes = await fetch(`${baseUrl}/api/assistant/query`, {
+      method: 'POST',
+      headers: patelHeaders,
+      body: JSON.stringify({ prompt: `Show patient ${ptAmb1}` }),
+    });
+    assert.equal(copilotAmbRes.status, 200);
+    const copilotAmbJson = (await copilotAmbRes.json()) as { data: { intent: string; headline: string } };
+    assert.equal(copilotAmbJson.data.intent, 'non_clinical_refusal');
+    assert.equal(copilotAmbJson.data.headline, 'Doctor Scope Only');
+
+    assert.equal(
+      (
+        await fetch(`${baseUrl}/api/assistant/confirm`, {
+          method: 'POST',
+          headers: patelHeaders,
+          body: JSON.stringify({
+            actionType: 'reschedule_appointment',
+            payload: { appointmentId: 'APT-AMB-1', appointmentDate: today, appointmentTime: '16:00' },
+          }),
+        })
+      ).status,
+      403
+    );
+
+    // B. Uniquely identifiable legacy clinician ("Dr. Elena Rostova") preserves valid access safely
+    const rostovaPts = ((await (await fetch(`${baseUrl}/api/patients`, { headers: rostovaHeaders })).json()) as {
+      data: Array<{ id: string }>;
+    }).data.map((p) => p.id);
+    assert.ok(rostovaPts.includes(ptRostovaLegacy));
+    assert.ok(rostovaPts.includes(ptRostovaNull));
+    assert.equal(rostovaPts.includes(ptPatelOwn), false);
+    assert.equal(rostovaPts.includes(ptAmb1), false);
+
+    assert.equal((await fetch(`${baseUrl}/api/patients/${ptRostovaLegacy}`, { headers: rostovaHeaders })).status, 200);
+    assert.equal((await fetch(`${baseUrl}/api/patients/${ptRostovaNull}`, { headers: rostovaHeaders })).status, 200);
+    assert.equal((await fetch(`${baseUrl}/api/patients/${ptPatelOwn}`, { headers: rostovaHeaders })).status, 403);
+
+    const rostovaApts = ((await (await fetch(`${baseUrl}/api/appointments`, { headers: rostovaHeaders })).json()) as {
+      data: Array<{ id: string }>;
+    }).data.map((a) => a.id);
+    assert.ok(rostovaApts.includes('APT-LEG-1'));
+    assert.ok(rostovaApts.includes('APT-LEG-NULL'));
+    assert.equal(rostovaApts.includes('APT-OWN-1'), false);
+
+    const rostovaFus = ((await (await fetch(`${baseUrl}/api/followups`, { headers: rostovaHeaders })).json()) as {
+      data: Array<{ id: string }>;
+    }).data.map((f) => f.id);
+    assert.ok(rostovaFus.includes('FU-LEG-1'));
+    assert.ok(rostovaFus.includes('FU-LEG-NULL'));
+
+    const rostovaCons = ((await (await fetch(`${baseUrl}/api/doctor/consultations`, { headers: rostovaHeaders })).json()) as {
+      data: Array<{ id: string }>;
+    }).data.map((c) => c.id);
+    assert.ok(rostovaCons.includes('CON-LEG-1'));
+    assert.ok(rostovaCons.includes('CON-LEG-NULL'));
+
+    assert.equal((await fetch(`${baseUrl}/api/staff/STF-LEG-UNIQ`, { headers: rostovaHeaders })).status, 200);
+    assert.equal((await fetch(`${baseUrl}/api/doctors/STF-LEG-UNIQ/schedule`, { headers: rostovaHeaders })).status, 200);
+
+    // If a second linked clinician with the same name appears, legacy resolution immediately fails closed
+    db.prepare(`
+      INSERT INTO staff (
+        id, clinic_id, user_id, full_name, role, department, specialty, email, contact_number,
+        status, attendance_status, default_appointment_duration, max_daily_capacity, verification_status, created_at, updated_at
+      ) VALUES ('STF-ROS-OTHER', ?, 'USR-OTHER-LINKED', 'Dr. Elena Rostova', 'Clinician', 'Neurology', 'Neurology', 'elena2@clinic.org', '+1-555-1009', 'Active', 'On Duty', 30, 16, 'Approved', ?, ?)
+    `).run(clinicId, nowIso, nowIso);
+    assert.equal((await fetch(`${baseUrl}/api/patients/${ptRostovaLegacy}`, { headers: rostovaHeaders })).status, 403);
+    assert.equal((await fetch(`${baseUrl}/api/patients/${ptRostovaNull}`, { headers: rostovaHeaders })).status, 403);
+    assert.equal((await fetch(`${baseUrl}/api/staff/STF-LEG-UNIQ`, { headers: rostovaHeaders })).status, 403);
+    assert.equal((await fetch(`${baseUrl}/api/staff/${rostovaLinkedStaffId}`, { headers: rostovaHeaders })).status, 200);
+
+    // C. Admin, Patient, and Clinic Tenancy boundaries remain intact
+    const adminPts = ((await (await fetch(`${baseUrl}/api/patients`, { headers: adminHeaders })).json()) as {
+      data: Array<{ id: string }>;
+    }).data;
+    assert.equal(adminPts.length, 6);
+    assert.equal((await fetch(`${baseUrl}/api/reports/overview`, { headers: adminHeaders })).status, 200);
+
+    const ptHeaders = { Authorization: 'Bearer token-patient-one', 'X-Clinic-Id': clinicId };
+    assert.equal((await fetch(`${baseUrl}/api/patient-portal/health`, { headers: ptHeaders })).status, 200);
+    assert.equal((await fetch(`${baseUrl}/api/patients`, { headers: ptHeaders })).status, 403);
+
+    assert.equal(
+      (await fetch(`${baseUrl}/api/patients`, { headers: { Authorization: 'Bearer token-doctor-a', 'X-Clinic-Id': clinicBId } })).status,
+      403
+    );
+  });
+});
+
+
+

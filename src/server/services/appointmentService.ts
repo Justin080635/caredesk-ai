@@ -8,6 +8,7 @@ import type {
   AppointmentType,
   AvailableSlot,
   DoctorScheduleDay,
+  DoctorScope,
   DoctorUnavailability,
   SortDirection,
   StaffMember,
@@ -26,6 +27,7 @@ import {
   isValidTimeString,
 } from '../domain/rules';
 import { recordAuditEvent } from './auditService';
+import { buildDoctorAppointmentSql } from './doctorAccessService';
 import { createNotification } from './notificationService';
 import { ServiceError } from './patientService';
 
@@ -117,6 +119,7 @@ export interface AppointmentFilterOptions {
   staffId?: string;
   requestStatus?: string;
   search?: string;
+  doctorScope?: DoctorScope;
 }
 
 function buildAppointmentWhereClause(filters?: AppointmentFilterOptions): {
@@ -127,6 +130,11 @@ function buildAppointmentWhereClause(filters?: AppointmentFilterOptions): {
   const conditions: string[] = ['a.clinic_id = ?'];
   const params: string[] = [clinicId];
 
+  if (filters?.doctorScope) {
+    const scopePred = buildDoctorAppointmentSql(filters.doctorScope, 'a');
+    conditions.push(scopePred.sql);
+    params.push(...scopePred.params);
+  }
   if (filters?.date && filters.date.trim().length > 0) {
     conditions.push('a.appointment_date = ?');
     params.push(filters.date.trim());
@@ -317,31 +325,42 @@ export function getAppointmentById(
 export function getTodaysAppointments(
   db: DatabaseSync,
   referenceToday?: string,
-  clinicId = DEFAULT_DEMO_CLINIC_ID
+  clinicId = DEFAULT_DEMO_CLINIC_ID,
+  doctorScope?: DoctorScope
 ): Appointment[] {
   const today = referenceToday ?? getClinicTodayDate();
-  return listAppointments(db, { clinicId, date: today });
+  return listAppointments(db, { clinicId, date: today, doctorScope });
 }
 
 export function getMissedAppointments(
   db: DatabaseSync,
-  options?: { days?: number; referenceToday?: string; clinicId?: string }
+  options?: { days?: number; referenceToday?: string; clinicId?: string; doctorScope?: DoctorScope }
 ): Appointment[] {
   const clinicId = options?.clinicId ?? DEFAULT_DEMO_CLINIC_ID;
   const today = options?.referenceToday ?? getClinicTodayDate();
   const days = Math.min(Math.max(1, Number(options?.days) || 7), 90);
   const startDate = addDaysToDateString(today, -(days - 1));
 
+  const conditions = [
+    'a.clinic_id = ?',
+    "a.status = 'Missed'",
+    'a.appointment_date >= ?',
+    'a.appointment_date <= ?',
+  ];
+  const params: string[] = [clinicId, startDate, today];
+  if (options?.doctorScope) {
+    const scopePred = buildDoctorAppointmentSql(options.doctorScope, 'a');
+    conditions.push(scopePred.sql);
+    params.push(...scopePred.params);
+  }
+
   const rows = db
     .prepare(
       `${BASE_SELECT}
-       WHERE a.clinic_id = ?
-         AND a.status = 'Missed'
-         AND a.appointment_date >= ?
-         AND a.appointment_date <= ?
+       WHERE ${conditions.join(' AND ')}
        ORDER BY a.appointment_date DESC, a.appointment_time DESC`
     )
-    .all(clinicId, startDate, today) as unknown as AppointmentRow[];
+    .all(...params) as unknown as AppointmentRow[];
 
   return rows.map(mapAppointmentRow);
 }
@@ -349,18 +368,29 @@ export function getMissedAppointments(
 export function getUnconfirmedAppointments(
   db: DatabaseSync,
   referenceToday?: string,
-  clinicId = DEFAULT_DEMO_CLINIC_ID
+  clinicId = DEFAULT_DEMO_CLINIC_ID,
+  doctorScope?: DoctorScope
 ): Appointment[] {
   const today = referenceToday ?? getClinicTodayDate();
+  const conditions = [
+    'a.clinic_id = ?',
+    "a.status = 'Scheduled'",
+    'a.appointment_date >= ?',
+  ];
+  const params: string[] = [clinicId, today];
+  if (doctorScope) {
+    const scopePred = buildDoctorAppointmentSql(doctorScope, 'a');
+    conditions.push(scopePred.sql);
+    params.push(...scopePred.params);
+  }
+
   const rows = db
     .prepare(
       `${BASE_SELECT}
-       WHERE a.clinic_id = ?
-         AND a.status = 'Scheduled'
-         AND a.appointment_date >= ?
+       WHERE ${conditions.join(' AND ')}
        ORDER BY a.appointment_date ASC, a.appointment_time ASC`
     )
-    .all(clinicId, today) as unknown as AppointmentRow[];
+    .all(...params) as unknown as AppointmentRow[];
 
   return rows.map(mapAppointmentRow);
 }
@@ -592,37 +622,33 @@ export function createAppointment(
   }
 
   // Resolve staff record if clinician matches
-  const staffMatch = staffId
-    ? (db
-        .prepare(
-          `SELECT id, full_name, user_id, status, attendance_status, max_daily_capacity
-           FROM staff WHERE id = ? AND clinic_id = ?`
-        )
-        .get(staffId, clinicId) as
-        | {
-            id: string;
-            full_name: string;
-            user_id: string | null;
-            status: string;
-            attendance_status: string;
-            max_daily_capacity: number;
-          }
-        | undefined)
-    : (db
-        .prepare(
-          `SELECT id, full_name, user_id, status, attendance_status, max_daily_capacity
-           FROM staff WHERE clinic_id = ? AND LOWER(full_name) = ? LIMIT 1`
-        )
-        .get(clinicId, clinician.toLowerCase()) as
-        | {
-            id: string;
-            full_name: string;
-            user_id: string | null;
-            status: string;
-            attendance_status: string;
-            max_daily_capacity: number;
-          }
-        | undefined);
+  type AppointmentStaffMatch = {
+    id: string;
+    full_name: string;
+    user_id: string | null;
+    status: string;
+    attendance_status: string;
+    max_daily_capacity: number;
+  };
+  let staffMatch: AppointmentStaffMatch | undefined;
+  if (staffId) {
+    staffMatch = db
+      .prepare(
+        `SELECT id, full_name, user_id, status, attendance_status, max_daily_capacity
+         FROM staff WHERE id = ? AND clinic_id = ?`
+      )
+      .get(staffId, clinicId) as AppointmentStaffMatch | undefined;
+  } else {
+    const matches = db
+      .prepare(
+        `SELECT id, full_name, user_id, status, attendance_status, max_daily_capacity
+         FROM staff WHERE clinic_id = ? AND LOWER(TRIM(full_name)) = ?`
+      )
+      .all(clinicId, clinician.trim().toLowerCase()) as AppointmentStaffMatch[];
+    if (matches.length === 1) {
+      staffMatch = matches[0];
+    }
+  }
 
   if (staffMatch) {
     staffId = staffMatch.id;
@@ -822,13 +848,22 @@ export function updateAppointment(
   }
 
   if (patch.clinician || patch.staffId) {
-    const staffRow = nextStaffId
-      ? (db
-          .prepare(`SELECT id, full_name FROM staff WHERE id = ? AND clinic_id = ?`)
-          .get(nextStaffId, clinicId) as { id: string; full_name: string } | undefined)
-      : (db
-          .prepare(`SELECT id, full_name FROM staff WHERE clinic_id = ? AND LOWER(full_name) = ? LIMIT 1`)
-          .get(clinicId, nextClinician.toLowerCase()) as { id: string; full_name: string } | undefined);
+    let staffRow: { id: string; full_name: string } | undefined;
+    if (nextStaffId) {
+      staffRow = db
+        .prepare(`SELECT id, full_name FROM staff WHERE id = ? AND clinic_id = ?`)
+        .get(nextStaffId, clinicId) as { id: string; full_name: string } | undefined;
+    } else {
+      const matches = db
+        .prepare(`SELECT id, full_name FROM staff WHERE clinic_id = ? AND LOWER(TRIM(full_name)) = ?`)
+        .all(clinicId, nextClinician.trim().toLowerCase()) as Array<{
+        id: string;
+        full_name: string;
+      }>;
+      if (matches.length === 1) {
+        staffRow = matches[0];
+      }
+    }
     if (staffRow) {
       nextStaffId = staffRow.id;
       nextClinician = staffRow.full_name;

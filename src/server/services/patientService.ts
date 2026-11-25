@@ -1,8 +1,9 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { AdministrativeStatus, Patient } from '../../shared/types';
+import type { AdministrativeStatus, DoctorScope, Patient } from '../../shared/types';
 import { DEFAULT_DEMO_CLINIC_ID } from '../db/database';
 import { getClinicTodayDate, isValidDateString, isValidEmail } from '../domain/rules';
 import { recordAuditEvent } from './auditService';
+import { buildDoctorPatientAssignmentSql } from './doctorAccessService';
 
 interface PatientRow {
   id: string;
@@ -65,11 +66,22 @@ const PATIENT_SELECT = `
 
 export function listPatients(
   db: DatabaseSync,
-  filters?: { clinicId?: string; search?: string; status?: string }
+  filters?: {
+    clinicId?: string;
+    search?: string;
+    status?: string;
+    assignedToDoctor?: DoctorScope;
+  }
 ): Patient[] {
   const clinicId = filters?.clinicId ?? DEFAULT_DEMO_CLINIC_ID;
   const conditions: string[] = ['clinic_id = ?'];
   const params: Array<string> = [clinicId];
+
+  if (filters?.assignedToDoctor) {
+    const scopePred = buildDoctorPatientAssignmentSql(filters.assignedToDoctor, 'patients');
+    conditions.push(scopePred.sql);
+    params.push(...scopePred.params);
+  }
 
   if (filters?.search && filters.search.trim().length > 0) {
     const q = `%${filters.search.trim().toLowerCase()}%`;

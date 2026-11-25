@@ -435,6 +435,7 @@ export function getPermissionsForRole(role: AccountRole): RolePermissions {
     case 'Clinic Administrator':
       return {
         canViewRecords: true,
+        canViewClinicReports: true,
         canManagePatients: true,
         canManageAppointments: true,
         canDeleteAppointments: true,
@@ -451,6 +452,7 @@ export function getPermissionsForRole(role: AccountRole): RolePermissions {
     case 'Doctor':
       return {
         canViewRecords: true,
+        canViewClinicReports: false,
         canManagePatients: false,
         canManageAppointments: true,
         canDeleteAppointments: false,
@@ -467,6 +469,7 @@ export function getPermissionsForRole(role: AccountRole): RolePermissions {
     case 'Receptionist':
       return {
         canViewRecords: true,
+        canViewClinicReports: true,
         canManagePatients: true,
         canManageAppointments: true,
         canDeleteAppointments: false,
@@ -483,6 +486,7 @@ export function getPermissionsForRole(role: AccountRole): RolePermissions {
     case 'Patient':
       return {
         canViewRecords: false,
+        canViewClinicReports: false,
         canManagePatients: false,
         canManageAppointments: false,
         canDeleteAppointments: false,
@@ -500,6 +504,7 @@ export function getPermissionsForRole(role: AccountRole): RolePermissions {
     default:
       return {
         canViewRecords: true,
+        canViewClinicReports: true,
         canManagePatients: false,
         canManageAppointments: false,
         canDeleteAppointments: false,

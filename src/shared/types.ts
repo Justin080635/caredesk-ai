@@ -56,6 +56,7 @@ export type DoctorVerificationStatus = 'Pending Verification' | 'Approved' | 'Re
 
 export interface RolePermissions {
   canViewRecords: boolean;
+  canViewClinicReports: boolean;
   canManagePatients: boolean;
   canManageAppointments: boolean;
   canDeleteAppointments: boolean;
@@ -68,6 +69,11 @@ export interface RolePermissions {
   canAuthorConsultations: boolean;
   canManageOwnSchedule: boolean;
   isPatientPortalOnly: boolean;
+}
+
+export interface DoctorScope {
+  staffId: string;
+  doctorName: string;
 }
 
 export interface AuthUserProfile {

@@ -552,3 +552,301 @@ test('CareDeskAgent strictly isolates Patient role from clinic-wide and other-pa
   assert.equal(notifReply.intent, 'patient_notifications');
   assert.ok(notifReply.headline.includes('1 Unread Notification'));
 });
+
+test('CareDeskAgent enforces strict Doctor scope across all phrasings without falling through to Admin logic', async () => {
+  let dailyReportCalled = false;
+  let overviewReportCalled = false;
+  let availabilitySummaryCalled = false;
+  let pendingFollowupsCalled = false;
+  let unconfirmedCalled = false;
+  let missedCalled = false;
+  let availabilityCalled = false;
+
+  const doctorAgent = new CareDeskAgent(
+    createBaseMockAdapter({
+      role: 'Doctor',
+      linkedStaffId: 'STF-1001',
+      async getDailyReport() {
+        dailyReportCalled = true;
+        throw new Error('Should never invoke clinic-wide daily report for Doctor role');
+      },
+      async getOverviewReport() {
+        overviewReportCalled = true;
+        throw new Error('Should never invoke clinic-wide overview report for Doctor role');
+      },
+      async getDoctorAvailabilitySummary() {
+        availabilitySummaryCalled = true;
+        throw new Error('Should never invoke clinic-wide doctor roster for Doctor role');
+      },
+      async getDoctorDashboard() {
+        return {
+          todayDate: '2026-11-24',
+          doctor: {
+            id: 'STF-1001',
+            fullName: 'Dr. Priya Patel',
+            role: 'Clinician',
+            department: 'General Medicine',
+            specialty: 'Family & Primary Care',
+            qualifications: 'MD, MPH',
+            licenseNumber: 'CA-98412',
+            bio: '',
+            email: 'priya@clinic.org',
+            contactNumber: '+1-555-0100',
+            status: 'Active',
+            attendanceStatus: 'Available',
+            defaultAppointmentDuration: 30,
+            maxDailyCapacity: 16,
+            verificationStatus: 'Approved',
+            createdAt: '',
+            updatedAt: '',
+          },
+          effectiveOperationalState: 'Available',
+          todayAppointments: [
+            {
+              id: 'APT-2025',
+              patientId: 'P-1026',
+              patientName: 'Marcus Holloway',
+              staffId: 'STF-1001',
+              appointmentDate: '2026-11-24',
+              appointmentTime: '08:30',
+              durationMinutes: 30,
+              department: 'General Medicine',
+              clinician: 'Dr. Priya Patel',
+              status: 'Confirmed',
+              notes: '',
+              createdAt: '',
+              updatedAt: '',
+            },
+          ],
+          nextAppointment: {
+            id: 'APT-2025',
+            patientId: 'P-1026',
+            patientName: 'Marcus Holloway',
+            staffId: 'STF-1001',
+            appointmentDate: '2026-11-24',
+            appointmentTime: '08:30',
+            durationMinutes: 30,
+            department: 'General Medicine',
+            clinician: 'Dr. Priya Patel',
+            status: 'Confirmed',
+            notes: '',
+            createdAt: '',
+            updatedAt: '',
+          },
+          assignedPatientsCount: 4,
+          pendingConsultationsCount: 1,
+          followupsRequiringAttention: [
+            {
+              id: 'FU-3004',
+              patientId: 'P-1042',
+              patientName: 'Julian Mercer',
+              appointmentId: 'APT-2019',
+              assignedStaffId: 'STF-1001',
+              assignedToName: 'Dr. Priya Patel',
+              description: 'Follow up with Julian Mercer',
+              priority: 'High',
+              createdDate: '2026-11-22',
+              dueDate: '2026-11-25',
+              status: 'Pending',
+              createdAt: '',
+              updatedAt: '',
+            },
+          ],
+          upcomingUnavailability: [],
+          todaySchedule: null,
+        };
+      },
+      async getPendingFollowups() {
+        pendingFollowupsCalled = true;
+        return [
+          {
+            id: 'FU-3004',
+            patientId: 'P-1042',
+            patientName: 'Julian Mercer',
+            appointmentId: 'APT-2019',
+            assignedStaffId: 'STF-1001',
+            assignedToName: 'Dr. Priya Patel',
+            description: 'Follow up with Julian Mercer',
+            priority: 'High',
+            createdDate: '2026-11-22',
+            dueDate: '2026-11-25',
+            status: 'Pending',
+            createdAt: '',
+            updatedAt: '',
+          },
+        ];
+      },
+      async getUnconfirmedAppointments() {
+        unconfirmedCalled = true;
+        return [
+          {
+            id: 'APT-2034',
+            patientId: 'P-1034',
+            patientName: 'Kenneth Osei',
+            staffId: 'STF-1001',
+            appointmentDate: '2026-11-25',
+            appointmentTime: '11:00',
+            durationMinutes: 30,
+            department: 'General Medicine',
+            clinician: 'Dr. Priya Patel',
+            status: 'Scheduled',
+            notes: '',
+            createdAt: '',
+            updatedAt: '',
+          },
+        ];
+      },
+      async getMissedAppointments() {
+        missedCalled = true;
+        return [
+          {
+            id: 'APT-2019',
+            patientId: 'P-1042',
+            patientName: 'Julian Mercer',
+            staffId: 'STF-1001',
+            appointmentDate: '2026-11-22',
+            appointmentTime: '14:00',
+            durationMinutes: 30,
+            department: 'General Medicine',
+            clinician: 'Dr. Priya Patel',
+            status: 'Missed',
+            notes: '',
+            createdAt: '',
+            updatedAt: '',
+          },
+        ];
+      },
+      async checkAvailability() {
+        availabilityCalled = true;
+        return [
+          {
+            date: '2026-11-24',
+            time: '10:00',
+            department: 'General Medicine',
+            clinician: 'Dr. Priya Patel',
+            durationMinutes: 30,
+          },
+        ];
+      },
+      async getPatientWithHistory(patientId) {
+        if (patientId === 'P-1028') {
+          throw new Error('Patients outside your assigned caseload cannot be accessed.');
+        }
+        return {
+          patient: {
+            id: patientId,
+            fullName: 'Julian Mercer',
+            dateOfBirth: '1984-04-06',
+            contactNumber: '+1-555-0159',
+            email: 'julian.mercer@example.org',
+            registrationDate: '2025-08-18',
+            administrativeStatus: 'Active',
+            createdAt: '2025-08-18T00:00:00Z',
+          },
+          appointments: [
+            {
+              id: 'APT-2019',
+              patientId,
+              staffId: 'STF-1001',
+              appointmentDate: '2026-11-22',
+              appointmentTime: '14:00',
+              durationMinutes: 30,
+              department: 'General Medicine',
+              clinician: 'Dr. Priya Patel',
+              status: 'Missed',
+              notes: '',
+              createdAt: '',
+              updatedAt: '',
+            },
+          ],
+          followups: [],
+        };
+      },
+    })
+  );
+
+  // 1. Clinic-wide / cross-doctor prompts (without 'my') must be refused cleanly
+  for (const blockedPrompt of [
+    "Give me today's clinic briefing.",
+    'Clinic overview',
+    'Which doctors are available today?',
+    'Show doctor availability across the clinic',
+    'Show all patients',
+    'Show staff roster',
+  ]) {
+    const reply = await doctorAgent.handlePrompt(blockedPrompt);
+    assert.equal(reply.intent, 'non_clinical_refusal', `Expected refusal for "${blockedPrompt}"`);
+    assert.equal(reply.headline, 'Doctor Scope Only');
+  }
+  assert.equal(dailyReportCalled, false);
+  assert.equal(overviewReportCalled, false);
+  assert.equal(availabilitySummaryCalled, false);
+
+  // 2. Operational prompts phrased WITHOUT 'my' still stay in Doctor scope (never Admin daily report)
+  const overdueReply = await doctorAgent.handlePrompt('Identify overdue follow-ups.');
+  assert.equal(overdueReply.intent, 'followup_queue');
+  assert.ok(overdueReply.headline.includes('Requiring Your Attention'));
+  assert.equal(pendingFollowupsCalled, true);
+
+  const unconfirmedReply = await doctorAgent.handlePrompt('Show pending appointments.');
+  assert.equal(unconfirmedReply.intent, 'unconfirmed_appointments');
+  assert.ok(unconfirmedReply.headline.includes('On Your Schedule') || unconfirmedReply.headline.includes('on Your Schedule'));
+  assert.equal(unconfirmedCalled, true);
+
+  const missedReply = await doctorAgent.handlePrompt('Identify patients who missed appointments in the last seven days.');
+  assert.equal(missedReply.intent, 'missed_appointments');
+  assert.ok(missedReply.headline.includes('In Your Caseload') || missedReply.headline.includes('in Your Caseload'));
+  assert.equal(missedCalled, true);
+
+  const prepFollowupReply = await doctorAgent.handlePrompt('Prepare an administrative follow-up list.');
+  assert.equal(prepFollowupReply.intent, 'prepare_followup_list');
+  assert.equal(prepFollowupReply.headline, 'Caseload Missed Appointment Follow-Up Plan');
+
+  const slotReply = await doctorAgent.handlePrompt('Find the next available appointment slot.');
+  assert.equal(slotReply.intent, 'find_available_slot');
+  assert.ok(slotReply.headline.includes('Next Available Slot:'));
+  assert.equal(availabilityCalled, true);
+
+  // 3. Cross-caseload patient summary & reschedule fail closed cleanly
+  const otherPatientReply = await doctorAgent.handlePrompt('Show patient P-1028');
+  assert.equal(otherPatientReply.intent, 'non_clinical_refusal');
+  assert.equal(otherPatientReply.headline, 'Doctor Scope Only');
+  assert.equal(otherPatientReply.pendingConfirmation, undefined);
+
+  const otherReschedReply = await doctorAgent.handlePrompt('Reschedule patient P-1028');
+  assert.equal(otherReschedReply.intent, 'non_clinical_refusal');
+  assert.equal(otherReschedReply.headline, 'Doctor Scope Only');
+  assert.equal(otherReschedReply.pendingConfirmation, undefined);
+
+  // Missing patient ID must fail closed or ask to specify an assigned patient rather than defaulting to P-1042
+  const missingIdSummary = await doctorAgent.handlePrompt('Show patient chart summary');
+  assert.equal(missingIdSummary.intent, 'non_clinical_refusal');
+  assert.equal(missingIdSummary.headline, 'Doctor Scope Only');
+
+  const missingIdResched = await doctorAgent.handlePrompt('Reschedule a patient');
+  assert.equal(missingIdResched.intent, 'general_help');
+  assert.equal(missingIdResched.headline, 'Specify an Assigned Patient ID to Reschedule');
+  assert.equal(missingIdResched.pendingConfirmation, undefined);
+
+  // 4. Unrecognized prompt stays in Clinician Copilot rather than Admin fallback
+  const unknownReply = await doctorAgent.handlePrompt('Hello there');
+  assert.equal(unknownReply.intent, 'general_help');
+  assert.equal(unknownReply.headline, 'CareDesk Clinician Copilot');
+
+  // 5. Never invokes clinic-wide reporting adapters
+  assert.equal(dailyReportCalled, false);
+  assert.equal(overviewReportCalled, false);
+  assert.equal(availabilitySummaryCalled, false);
+
+  // 6. Unlinked doctor adapter fails closed
+  const unlinkedDoctorAgent = new CareDeskAgent(
+    createBaseMockAdapter({
+      role: 'Doctor',
+      linkedStaffId: null,
+    })
+  );
+  const unlinkedReply = await unlinkedDoctorAgent.handlePrompt('What is my schedule today?');
+  assert.equal(unlinkedReply.intent, 'non_clinical_refusal');
+  assert.equal(unlinkedReply.headline, 'Doctor Scope Only');
+});
+

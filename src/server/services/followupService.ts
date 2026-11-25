@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type {
+  DoctorScope,
   FollowUpPriority,
   FollowUpStatus,
   FollowUpTask,
@@ -8,6 +9,7 @@ import type {
 import { DEFAULT_DEMO_CLINIC_ID } from '../db/database';
 import { getClinicTodayDate, isValidDateString } from '../domain/rules';
 import { recordAuditEvent } from './auditService';
+import { buildDoctorFollowupSql } from './doctorAccessService';
 import { createNotification } from './notificationService';
 import { ServiceError } from './patientService';
 
@@ -123,6 +125,7 @@ export function listFollowups(
     patientId?: string;
     assignedStaffId?: string;
     followupType?: string;
+    doctorScope?: DoctorScope;
   }
 ): FollowUpTask[] {
   const clinicId = filters?.clinicId ?? DEFAULT_DEMO_CLINIC_ID;
@@ -130,6 +133,11 @@ export function listFollowups(
   const conditions: string[] = ['f.clinic_id = ?'];
   const params: Array<string> = [clinicId];
 
+  if (filters?.doctorScope) {
+    const scopePred = buildDoctorFollowupSql(filters.doctorScope, 'f');
+    conditions.push(scopePred.sql);
+    params.push(...scopePred.params);
+  }
   if (filters?.priority && filters.priority !== 'All') {
     conditions.push('f.priority = ?');
     params.push(filters.priority);
@@ -138,7 +146,7 @@ export function listFollowups(
     conditions.push('f.patient_id = ?');
     params.push(filters.patientId.trim());
   }
-  if (filters?.assignedStaffId && filters.assignedStaffId.trim().length > 0) {
+  if (filters?.assignedStaffId && filters.assignedStaffId.trim().length > 0 && !filters?.doctorScope) {
     conditions.push('f.assigned_staff_id = ?');
     params.push(filters.assignedStaffId.trim());
   }
@@ -170,12 +178,17 @@ export function listFollowups(
 export function getPendingFollowups(
   db: DatabaseSync,
   clinicId = DEFAULT_DEMO_CLINIC_ID,
-  assignedStaffId?: string
+  assignedStaffId?: string,
+  doctorScope?: DoctorScope
 ): FollowUpTask[] {
   const today = getClinicTodayDate();
   const clauses = ["f.clinic_id = ?", "f.status IN ('Pending', 'Scheduled', 'Due', 'Overdue')"];
   const params: string[] = [clinicId];
-  if (assignedStaffId) {
+  if (doctorScope) {
+    const scopePred = buildDoctorFollowupSql(doctorScope, 'f');
+    clauses.push(scopePred.sql);
+    params.push(...scopePred.params);
+  } else if (assignedStaffId) {
     clauses.push('f.assigned_staff_id = ?');
     params.push(assignedStaffId);
   }
@@ -297,15 +310,19 @@ export function createFollowup(
       assignedUserId = staffRow.user_id;
     }
   } else if (assignedToName) {
-    const staffRow = db
-      .prepare('SELECT id, full_name, user_id FROM staff WHERE clinic_id = ? AND LOWER(full_name) = ? LIMIT 1')
-      .get(clinicId, assignedToName.toLowerCase()) as
-      | { id: string; full_name: string; user_id: string | null }
-      | undefined;
-    if (staffRow) {
-      assignedStaffId = staffRow.id;
-      assignedToName = staffRow.full_name;
-      assignedUserId = staffRow.user_id;
+    const matches = db
+      .prepare(
+        'SELECT id, full_name, user_id FROM staff WHERE clinic_id = ? AND LOWER(TRIM(full_name)) = ?'
+      )
+      .all(clinicId, assignedToName.trim().toLowerCase()) as Array<{
+      id: string;
+      full_name: string;
+      user_id: string | null;
+    }>;
+    if (matches.length === 1) {
+      assignedStaffId = matches[0].id;
+      assignedToName = matches[0].full_name;
+      assignedUserId = matches[0].user_id;
     }
   }
 

@@ -1,5 +1,7 @@
 import 'dotenv/config';
+import { createServer as createHttpServer } from 'node:http';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import express from 'express';
 import type { DatabaseSync } from 'node:sqlite';
 import { createServer as createViteServer } from 'vite';
@@ -26,6 +28,12 @@ import {
   getClinicDoctorAvailabilitySummary,
   getDoctorDashboard,
 } from './src/server/services/doctorService';
+import {
+  assertDoctorCanAccessPatient,
+  assertDoctorOwnsAppointment,
+  assertDoctorTargetsSelf,
+  requireDoctorScope,
+} from './src/server/services/doctorAccessService';
 import {
   createFollowup,
   getPendingFollowups,
@@ -117,7 +125,122 @@ function createRoleScopedAdapter(
     };
   }
 
-  // Staff / Doctor / Clinic Administrator adapter
+  // Strictly Doctor-isolated adapter — fails closed unless linked to an active verified clinician
+  // profile, blocks clinic-wide reports, and scopes all patient/appointment/follow-up operations.
+  if (role === 'Doctor') {
+    const doctorScope = requireDoctorScope(db, ctx);
+    const deniedClinicWide = () => {
+      throw new ServiceError(
+        403,
+        'FORBIDDEN',
+        'Doctor accounts cannot access clinic-wide reports or another clinician’s records.'
+      );
+    };
+
+    return {
+      role,
+      linkedStaffId: doctorScope.staffId,
+      async getDailyReport() {
+        return deniedClinicWide();
+      },
+      async getOverviewReport() {
+        return deniedClinicWide();
+      },
+      async getUnconfirmedAppointments() {
+        return getUnconfirmedAppointments(db, undefined, clinicId, doctorScope);
+      },
+      async getMissedAppointments(days = 7) {
+        return getMissedAppointments(db, { clinicId, days, doctorScope });
+      },
+      async getPendingFollowups() {
+        return getPendingFollowups(db, clinicId, undefined, doctorScope);
+      },
+      async checkAvailability(params) {
+        assertDoctorTargetsSelf(db, clinicId, doctorScope, undefined, params.clinician);
+        if (params.patientId) {
+          assertDoctorCanAccessPatient(db, clinicId, params.patientId, doctorScope);
+        }
+        return checkAppointmentAvailability(db, {
+          clinicId,
+          ...params,
+          clinician: undefined,
+          staffId: doctorScope.staffId,
+        });
+      },
+      async getPatientWithHistory(requestedPatientId: string) {
+        const patient = getPatientById(db, requestedPatientId, clinicId);
+        assertDoctorCanAccessPatient(db, clinicId, patient.id, doctorScope);
+        const appointments = listAppointments(db, {
+          clinicId,
+          patientId: patient.id,
+          doctorScope,
+        });
+        const followups = listFollowups(db, {
+          clinicId,
+          patientId: patient.id,
+          doctorScope,
+        });
+        return { patient, appointments, followups };
+      },
+      async getAppointmentById(appointmentId: string) {
+        const apt = getAppointmentById(db, appointmentId, clinicId);
+        assertDoctorOwnsAppointment(db, clinicId, apt, doctorScope);
+        return apt;
+      },
+      async rescheduleAppointment(appointmentId, patch) {
+        const existing = getAppointmentById(db, appointmentId, clinicId);
+        assertDoctorOwnsAppointment(db, clinicId, existing, doctorScope);
+        return updateAppointment(
+          db,
+          appointmentId,
+          {
+            appointmentDate: patch.appointmentDate,
+            appointmentTime: patch.appointmentTime,
+            status: 'Scheduled',
+            notes: patch.notes,
+            staffId: doctorScope.staffId,
+            clinician: doctorScope.doctorName,
+          },
+          actor,
+          clinicId
+        );
+      },
+      async createFollowup(input) {
+        assertDoctorCanAccessPatient(db, clinicId, input.patientId, doctorScope);
+        if (input.appointmentId) {
+          const apt = getAppointmentById(db, input.appointmentId, clinicId);
+          if (apt.patientId !== input.patientId) {
+            throw new ServiceError(
+              400,
+              'VALIDATION_ERROR',
+              'Appointment does not belong to the selected patient.'
+            );
+          }
+          assertDoctorOwnsAppointment(db, clinicId, apt, doctorScope);
+        }
+        return createFollowup(
+          db,
+          {
+            ...input,
+            assignedStaffId: doctorScope.staffId,
+            assignedToName: doctorScope.doctorName,
+          },
+          actor,
+          clinicId
+        );
+      },
+      async getDoctorAvailabilitySummary(params) {
+        return getClinicDoctorAvailabilitySummary(db, clinicId, params).filter(
+          (doc) => doc.staffId === doctorScope.staffId
+        );
+      },
+      async getDoctorDashboard() {
+        return getDoctorDashboard(db, clinicId, doctorScope.staffId);
+      },
+    };
+  }
+
+  // Staff / Receptionist / Clinic Administrator adapter
   return {
     role,
     linkedStaffId: ctx.linkedStaffId,
@@ -134,11 +257,7 @@ function createRoleScopedAdapter(
       return getMissedAppointments(db, { clinicId, days });
     },
     async getPendingFollowups() {
-      return getPendingFollowups(
-        db,
-        clinicId,
-        role === 'Doctor' && ctx.linkedStaffId ? ctx.linkedStaffId : undefined
-      );
+      return getPendingFollowups(db, clinicId);
     },
     async checkAvailability(params) {
       return checkAppointmentAvailability(db, { clinicId, ...params });
@@ -355,10 +474,40 @@ export function createExpressApp(
         if (
           (actionType !== 'reschedule_appointment' && actionType !== 'create_missed_followups') ||
           !payload ||
-          typeof payload !== 'object'
+          typeof payload !== 'object' ||
+          Array.isArray(payload)
         ) {
           res.status(400).json({
             error: { code: 'VALIDATION_ERROR', message: 'Invalid confirmation payload.' },
+          });
+          return;
+        }
+        if (
+          actionType === 'reschedule_appointment' &&
+          (typeof payload.appointmentId !== 'string' ||
+            !payload.appointmentId.trim() ||
+            typeof payload.appointmentDate !== 'string' ||
+            !payload.appointmentDate.trim() ||
+            typeof payload.appointmentTime !== 'string' ||
+            !payload.appointmentTime.trim())
+        ) {
+          res.status(400).json({
+            error: {
+              code: 'VALIDATION_ERROR',
+              message: 'Reschedule confirmation requires appointmentId, appointmentDate, and appointmentTime.',
+            },
+          });
+          return;
+        }
+        if (
+          actionType === 'create_missed_followups' &&
+          (!Array.isArray(payload.tasks) || payload.tasks.length === 0)
+        ) {
+          res.status(400).json({
+            error: {
+              code: 'VALIDATION_ERROR',
+              message: 'Follow-up confirmation requires a non-empty tasks array.',
+            },
           });
           return;
         }
@@ -386,12 +535,48 @@ export function createExpressApp(
   return app;
 }
 
+function readCliFlag(flagName: string): string | undefined {
+  const args = process.argv.slice(2);
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === flagName && args[i + 1] && !args[i + 1].startsWith('-')) {
+      return args[i + 1];
+    }
+    if (arg.startsWith(`${flagName}=`)) {
+      return arg.slice(flagName.length + 1);
+    }
+  }
+  return undefined;
+}
+
+function resolveListenConfig(): { port: number; host: string } {
+  const cliPortRaw = readCliFlag('--port');
+  const cliPort = cliPortRaw ? Number(cliPortRaw) : NaN;
+  const envPortRaw = process.env.PORT;
+  const envPort = envPortRaw ? Number(envPortRaw) : NaN;
+
+  let port = 3000;
+  if (Number.isInteger(cliPort) && cliPort > 0 && cliPort <= 65535) {
+    port = cliPort;
+  } else if (process.env.NODE_ENV === 'production') {
+    port = Number.isInteger(envPort) && envPort > 0 && envPort <= 65535 ? envPort : 3000;
+  } else if (Number.isInteger(envPort) && envPort > 0 && envPort <= 65535 && envPort !== 8080) {
+    // In this dev container, PORT=8080 is reserved by the outer nginx proxy; dev server runs on 3000.
+    port = envPort;
+  }
+
+  const cliHost = readCliFlag('--host')?.trim();
+  const host = cliHost || process.env.HOST?.trim() || '0.0.0.0';
+  return { port, host };
+}
+
 async function startServer() {
   const db = getDatabase();
   seedDatabaseIfEmpty(db);
 
   const app = createExpressApp(db);
-  const port = Number(process.env.PORT) || 3000;
+  const httpServer = createHttpServer(app);
+  const { port, host } = resolveListenConfig();
 
   if (process.env.NODE_ENV === 'production') {
     const distDir = path.resolve(process.cwd(), 'dist');
@@ -400,23 +585,32 @@ async function startServer() {
       res.sendFile(path.join(distDir, 'index.html'));
     });
   } else {
+    const disableHmr = process.env.DISABLE_HMR === 'true';
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        ...(disableHmr ? { hmr: false, ws: false } : { hmr: { server: httpServer } }),
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   }
 
-  app.listen(port, '0.0.0.0', () => {
-    console.log(`CareDesk AI server listening on http://localhost:${port}`);
+  await new Promise<void>((resolve, reject) => {
+    httpServer.once('error', reject);
+    httpServer.listen(port, host, () => {
+      httpServer.off('error', reject);
+      console.log(`CareDesk AI server listening on http://localhost:${port}`);
+      resolve();
+    });
   });
 }
 
 // Start HTTP server only when executed directly (allows tests to import createExpressApp cleanly)
+const entryPath = process.argv[1] ? path.resolve(process.argv[1]) : '';
+const currentFilePath = path.resolve(fileURLToPath(import.meta.url));
 const isDirectExecution =
-  typeof process !== 'undefined' &&
-  process.argv[1] &&
-  process.argv[1].endsWith('server.ts');
+  entryPath === currentFilePath || entryPath.endsWith(`${path.sep}server.ts`);
 
 if (isDirectExecution) {
   startServer().catch((err) => {

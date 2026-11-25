@@ -249,12 +249,17 @@ export function resolveLinkedStaffIdForUser(
   if (byUserId) return byUserId.id;
 
   if (user.email) {
-    const byEmail = db
-      .prepare(`SELECT id FROM staff WHERE clinic_id = ? AND LOWER(email) = ? LIMIT 1`)
-      .get(clinicId, user.email.trim().toLowerCase()) as { id: string } | undefined;
-    if (byEmail) {
-      db.prepare(`UPDATE staff SET user_id = ? WHERE id = ?`).run(user.id, byEmail.id);
-      return byEmail.id;
+    const matches = db
+      .prepare(
+        `SELECT id, user_id FROM staff WHERE clinic_id = ? AND LOWER(TRIM(email)) = ?`
+      )
+      .all(clinicId, user.email.trim().toLowerCase()) as Array<{
+      id: string;
+      user_id: string | null;
+    }>;
+    if (matches.length === 1 && matches[0].user_id === null) {
+      db.prepare(`UPDATE staff SET user_id = ? WHERE id = ?`).run(user.id, matches[0].id);
+      return matches[0].id;
     }
   }
   return null;
